@@ -9,6 +9,34 @@ python -m uvicorn web.server:app --port 8787
 
 需要 `pip install fastapi uvicorn`（或 `pip install -e ".[web]"`）。
 
+## 前端技术栈
+
+`web/frontend/` 是一个独立的前端工程：
+
+| | |
+|---|---|
+| 构建 | Vite 6 + React 18 + TypeScript（strict） |
+| 样式 | Tailwind CSS 3 + CSS 变量主题（浅/深） |
+| 组件 | shadcn/ui 风格组件（Radix 原语 + CVA），源码在 `src/components/ui/` |
+| 图标 | lucide-react |
+| 多语言 | react-i18next，中/英两套文案，自动检测 + localStorage 记忆 |
+| Toast | sonner |
+
+构建产物输出到 `web/static/dist/`，由 FastAPI 直接托管（`/` 与 `/assets`），
+**已提交进仓库**，所以 clone 下来不装 node 也能跑。旧的单文件页面仍在
+`/legacy` 作为回退。
+
+```bash
+cd web/frontend
+npm install
+npm run dev        # http://127.0.0.1:5273，/api 与 /ws 代理到 8787
+npm run build      # -> web/static/dist
+npm run typecheck
+```
+
+改文案只动 `src/i18n/locales/{zh,en}.ts`；加厂商只动
+`avb/provider_specs.py`（服务端）+ 对应语言文件里的 `vendor.*` 键。
+
 ---
 
 ## 界面

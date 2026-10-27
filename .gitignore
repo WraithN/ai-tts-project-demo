@@ -21,6 +21,11 @@ venv/
 demo/out/
 *.log
 
+# node / frontend
+node_modules/
+# ...but the React build output is committed so `avb web` works without npm
+!web/static/dist/
+
 # test / tooling
 .pytest_cache/
 .mypy_cache/

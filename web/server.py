@@ -49,7 +49,12 @@ async def _capture_loop():
     _main_loop = asyncio.get_running_loop()
 
 STATIC = Path(__file__).parent / "static"
+# React build output (web/frontend -> web/static/dist). If it is missing we
+# fall back to the hand-written legacy page, so the server always boots.
+DIST = STATIC / "dist"
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+if DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
 
 # ---------------------------------------------------------------------------
 # Job manager
@@ -159,6 +164,14 @@ class SettingsUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 @app.get("/")
 async def index():
+    if DIST.is_dir():
+        return FileResponse(str(DIST / "index.html"))
+    return FileResponse(str(STATIC / "index.html"))
+
+
+@app.get("/legacy")
+async def legacy():
+    """The pre-React single-file UI, kept as a fallback."""
     return FileResponse(str(STATIC / "index.html"))
 
 
