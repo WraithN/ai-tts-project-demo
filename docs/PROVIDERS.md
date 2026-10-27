@@ -136,6 +136,7 @@ pipeline works beats three hours of local inference.
 | `kling` | `KlingVideo` | ✅ adapter implemented, needs `KLING_API_KEY` |
 | `veo` | `VeoVideo` | ✅ adapter implemented, needs `GOOGLE_API_KEY` |
 | `jimeng`/`dreamina` | `JimengVideo` | ✅ adapter implemented, needs `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` |
+| `seedance` | `SeedanceVideo` | ✅ adapter implemented, needs `SEEDANCE_API_KEY` |
 | `bailian`/`wan` | `BailianVideo` | ✅ adapter implemented, needs `BAILIAN_API_KEY` |
 | `minimax`/`hailuo` | `MiniMaxVideo` | ✅ adapter implemented, needs `MINIMAX_API_KEY` |
 | `zhipu`/`cogvideox` | `ZhipuVideo` | ✅ adapter implemented, needs `ZHIPU_API_KEY` |
@@ -171,6 +172,30 @@ text-to-video as of 2026-10). ByteDance versions these aggressively, so it
 is overridable via `JIMENG_REQ_KEY` rather than hardcoded into the payload
 logic. Statuses seen: `in_queue` → `generating` → `done` (or
 `not_found`/`expired` on the failure path).
+
+### Seedance — the simpler sibling
+
+Same company (ByteDance), same ecosystem (Volcengine), but a different API
+surface. Where Jimeng needs the AK/SK HMAC dance, **Seedance takes a plain
+Bearer API key** from the Ark console. It is JSON in, JSON out, and the
+adapter is ~15 lines of submit/poll.
+
+| | Jimeng | Seedance |
+|---|---|---|
+| Auth | AK/SK HMAC-SHA256 | Bearer API key |
+| Endpoint host | `visual.volcengineapi.com` | `ark.cn-beijing.volces.com` |
+| Actions | `CVSync2AsyncSubmitTask` / `GetResult` | `POST`/`GET .../contents/generations/tasks` |
+| Billing | credits | tokens (15 CNY/M pro, 4.2 CNY/M fast) |
+| Statuses | `in_queue`→`generating`→`done` | `queued`→`running`→`succeeded` |
+
+Model tier comes from `SEEDANCE_MODEL` (`doubao-seedance-2-0-pro` by default,
+`...-mini` for fast/cheap). Like Jimeng, the identifier gets reved often, so
+keep it in env rather than baked into the payload.
+
+```bash
+export SEEDANCE_API_KEY=...
+python -m avb.cli config set video.provider seedance
+```
 
 **Not yet live-tested against a billed endpoint** — no paid video key was
 available in this environment. The request shapes follow each vendor's

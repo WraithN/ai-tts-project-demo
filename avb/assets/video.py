@@ -29,7 +29,7 @@ from .image import background
 
 __all__ = [
     "MockVideo", "VeoVideo", "KlingVideo",
-    "BailianVideo", "MiniMaxVideo", "ZhipuVideo", "JimengVideo",
+    "BailianVideo", "MiniMaxVideo", "ZhipuVideo", "JimengVideo", "SeedanceVideo",
     "VideoResult", "build_video_provider",
 ]
 
@@ -494,6 +494,94 @@ class JimengVideo(_AsyncVideoBase):
 
 
 # --------------------------------------------------------------------------
+# Seedance (ByteDance / Volcengine Ark)
+# --------------------------------------------------------------------------
+#
+# Seedance is the video-generation family behind Doubao (豆包) on Volcengine
+# Ark. Two things make it different from the sibling Jimeng adapter:
+#
+# 1. Auth is a plain Bearer API key -- not the AK/SK HMAC-SHA256 signature
+#    that Jimeng needs. Key comes from the Ark console. So this adapter is
+#    ~15 lines of submit/poll and nothing else.
+# 2. Billing is per-token (15 CNY/M tokens for pro, 4.2 for fast), not
+#    per-second. `price_per_sec` below is a rough USD equivalent purely so
+#    the shared cost ledger has something to report.
+#
+# Model tiers: "doubao-seedance-2-0-pro" (quality) and
+# "doubao-seedance-2-0-mini" (fast/cheap). Override via SEEDANCE_MODEL --
+# ByteDance revs these identifiers often and a stale id is the single most
+# common failure mode here.
+#
+# Submit -> poll -> download, so it inherits _AsyncVideoBase unchanged.
+
+
+class SeedanceVideo(_AsyncVideoBase):
+    """ByteDance Seedance via the Volcengine Ark API.
+
+    Text-to-video and image-to-video. Newer and cleaner than Jimeng: plain
+    Bearer auth, JSON in/out, status strings 'queued' / 'running' /
+    'succeeded' / 'failed'. The returned video URL is a pre-signed link valid
+    for 24h, and the base class downloads it immediately, so expiry is not a
+    concern in normal operation.
+    """
+
+    name = "seedance"
+    env_key = "SEEDANCE_API_KEY"
+    price_per_sec = 0.05  # rough USD equivalent of token billing
+    submit_url = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get(self.env_key, "")
+        self.model = os.environ.get("SEEDANCE_MODEL", "doubao-seedance-2-0-pro")
+
+    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+        payload = {
+            "model": self.model,
+            "content": [{"type": "text", "text": prompt[:600]}],
+            "ratio": "9:16",  # vertical ad default
+            "duration": int(max(2, min(12, seconds))),
+            "watermark": False,
+        }
+        r = requests.post(
+            self.submit_url,
+            headers=self._headers(),
+            json=payload,
+            timeout=120,
+        )
+        r.raise_for_status()
+        d = r.json()
+        task_id = d.get("id")
+        if not task_id:
+            raise RuntimeError(f"Seedance returned no task id: {d}")
+        return task_id
+
+    def _poll(self, job_id: str, timeout: float = 900.0) -> str:
+        url = f"{self.submit_url}/{job_id}"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r = requests.get(url, headers=self._headers(), timeout=60)
+            r.raise_for_status()
+            d = r.json()
+            status = str(d.get("status", "")).lower()
+            if status == "succeeded":
+                # Ark nests the link under content.video_url (or data.video_url
+                # depending on the model revision); accept either.
+                content = d.get("content") or d.get("data") or {}
+                if isinstance(content, list):
+                    content = content[0] if content else {}
+                url_out = content.get("video_url") if isinstance(content, dict) else None
+                if not url_out:
+                    url_out = d.get("video_url")
+                if not url_out:
+                    raise RuntimeError(f"Seedance succeeded but no video_url: {d}")
+                return url_out
+            if status in ("failed", "cancelled", "expired"):
+                raise RuntimeError(f"Seedance job {job_id} ended as {status}: {d}")
+            time.sleep(5)
+        raise TimeoutError(f"Seedance job {job_id} timed out")
+
+
+# --------------------------------------------------------------------------
 # Provider selection
 # --------------------------------------------------------------------------
 
@@ -509,6 +597,7 @@ _REGISTRY: dict[str, type] = {
     "cogvideox": ZhipuVideo,
     "jimeng": JimengVideo,
     "dreamina": JimengVideo,
+    "seedance": SeedanceVideo,
 }
 
 
@@ -520,7 +609,7 @@ def build_video_provider(prefer: str | None = None) -> Provider:
     vendor kills an API (see: Sora 2, Sept 2026) the pipeline keeps running.
     """
     order = [prefer or os.environ.get("AVB_VIDEO_PROVIDER") or "mock"]
-    order += [k for k in ("veo", "kling", "jimeng", "bailian", "minimax", "zhipu", "mock") if k not in order]
+    order += [k for k in ("veo", "kling", "jimeng", "seedance", "bailian", "minimax", "zhipu", "mock") if k not in order]
     for key in order:
         cls = _REGISTRY.get(key)
         if not cls:

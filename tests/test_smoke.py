@@ -323,3 +323,33 @@ def test_jimeng_registered_and_needs_two_keys():
     j.secret_key = "sk"
     assert j.available() is True
     assert j.req_key.startswith("jimeng_")
+
+
+# --------------------------------------------------------------------------
+# Seedance
+# --------------------------------------------------------------------------
+
+
+def test_seedance_registered_and_single_key():
+    from avb.assets.video import _REGISTRY, SeedanceVideo
+
+    assert _REGISTRY.get("seedance") is SeedanceVideo
+
+    s = SeedanceVideo()
+    s.api_key = ""
+    assert s.available() is False
+    s.api_key = "ark-key"
+    assert s.available() is True
+    # model tier defaults to something seedance-shaped
+    assert s.model.startswith("doubao-seedance")
+
+
+def test_seedance_model_overridable(monkeypatch):
+    import importlib
+
+    import avb.assets.video as v
+
+    monkeypatch.setenv("SEEDANCE_MODEL", "doubao-seedance-2-0-mini")
+    monkeypatch.setenv("SEEDANCE_API_KEY", "k")
+    s = v.SeedanceVideo()
+    assert s.model == "doubao-seedance-2-0-mini", s.model

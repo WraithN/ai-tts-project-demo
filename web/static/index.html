@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Video Builder — 广告视频自动生产</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --border: #e3e6ea;
+    --text: #1a1d21;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --success: #059669;
+    --warn: #d97706;
+    --error: #dc2626;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    font-size: 14px;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 14px 24px; display: flex; align-items: center;
+    justify-content: space-between; position: sticky; top: 0; z-index: 100;
+  }
+  header h1 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+  header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success); margin-right: 6px;
+  }
+  .layout {
+    max-width: 1400px; margin: 0 auto; padding: 20px 24px;
+    display: grid; grid-template-columns: 400px 1fr; gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 13px; font-weight: 650; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted); margin-bottom: 14px;
+  }
+  label {
+    display: block; font-size: 12px; font-weight: 550;
+    margin-bottom: 5px; color: var(--text);
+  }
+  textarea, input[type="text"], select {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--border);
+    border-radius: 7px; font-size: 13px; font-family: inherit;
+    background: #fff; color: var(--text); outline: none;
+    transition: border-color .15s;
+  }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 150px; line-height: 1.5; }
+  .field { margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .btn {
+    padding: 9px 16px; border: none; border-radius: 7px; font-size: 13px;
+    font-weight: 550; cursor: pointer; font-family: inherit;
+    transition: background .15s; width: 100%;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
+  .btn-secondary { background: #f1f3f5; color: var(--text); }
+  .btn-secondary:hover { background: #e6e9ec; }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-success:hover { opacity: .9; }
+  .progress-wrap { display: none; margin-top: 14px; }
+  .progress-bar {
+    height: 6px; background: #e9ecef; border-radius: 3px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: var(--accent); width: 0%;
+    transition: width .3s ease;
+  }
+  .progress-text {
+    font-size: 12px; color: var(--muted); margin-top: 6px;
+    display: flex; justify-content: space-between;
+  }
+  video {
+    width: 100%; border-radius: 7px; background: #000; display: block;
+    max-height: 520px;
+  }
+  .video-placeholder {
+    width: 100%; aspect-ratio: 9/16; max-height: 520px;
+    background: #f1f3f5; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 13px; text-align: center; padding: 20px;
+  }
+  .chat-log {
+    max-height: 260px; overflow-y: auto; margin-bottom: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { padding: 8px 12px; border-radius: 8px; font-size: 13px; max-width: 88%; }
+  .msg.user { background: var(--accent); color: #fff; align-self: flex-end; }
+  .msg.system { background: #f1f3f5; color: var(--text); align-self: flex-start; }
+  .msg .meta { font-size: 11px; opacity: .75; margin-top: 4px; }
+  .chat-input { display: flex; gap: 8px; }
+  .chat-input input { flex: 1; }
+  .chat-input button { width: auto; padding: 9px 18px; }
+  .log {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; background: #1a1d21; color: #d1d5db;
+    padding: 12px; border-radius: 7px; max-height: 200px; overflow-y: auto;
+    white-space: pre-wrap; line-height: 1.5;
+  }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 550;
+  }
+  .badge.ok { background: #d1fae5; color: #065f46; }
+  .badge.off { background: #f3f4f6; color: #6b7280; }
+  .provider-list { display: flex; flex-direction: column; gap: 6px; }
+  .provider-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; background: #f8f9fa; border-radius: 6px; font-size: 12px;
+  }
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab {
+    padding: 7px 14px; border: none; background: transparent;
+    font-size: 13px; font-weight: 550; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; font-family: inherit;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .error-box {
+    background: #fef2f2; border: 1px solid #fecaca; color: var(--error);
+    padding: 10px 12px; border-radius: 7px; font-size: 12px; margin-top: 12px;
+    display: none;
+  }
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px;
+  }
+  .stat { background: #f8f9fa; padding: 10px; border-radius: 7px; text-align: center; }
+  .stat .v { font-size: 17px; font-weight: 650; }
+  .stat .k { font-size: 11px; color: var(--muted); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>AI Video Builder</h1>
+    <div class="sub">广告文案 → 成片视频 → 一键发布 TikTok</div>
+  </div>
+  <div style="font-size:12px;color:var(--muted)">
+    <span class="status-dot"></span><span id="sysStatus">就绪</span>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: input & config -->
+  <div>
+    <div class="panel">
+      <h2>1 · 广告脚本</h2>
+      <div class="field">
+        <textarea id="script" placeholder="粘贴你的广告文案，每行一句。例如：
+
+Your afternoon crash is not about willpower. It is about NAD.
+NAD is the molecule your cells use to turn food into energy.
+After thirty, it drops. That is why you fade at three PM.
+Our liposomal NMN restores your NAD levels. One capsule.
+Forty percent off your first bottle. Tap below."></textarea>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>风格</label>
+          <select id="style">
+            <option value="dr_vsl">DR VSL（促销直效）</option>
+            <option value="comic">Comic 漫画</option>
+            <option value="vector">Vector 矢量</option>
+            <option value="claymation">Claymation 黏土</option>
+            <option value="talking_head">Talking Head 口播</option>
+            <option value="cinematic">Cinematic 电影感</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>画幅</label>
+          <select id="aspect">
+            <option value="9:16">9:16 竖屏（TikTok）</option>
+            <option value="1:1">1:1 方形</option>
+            <option value="4:5">4:5 信息流</option>
+            <option value="16:9">16:9 横屏</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>视频模型</label>
+          <select id="videoProvider">
+            <option value="">自动（按可用顺序）</option>
+            <option value="seedance">Seedance 字节</option>
+            <option value="kling">Kling 可灵</option>
+            <option value="jimeng">Jimeng 即梦</option>
+            <option value="veo">Veo Google</option>
+            <option value="bailian">Wan 通义万相</option>
+            <option value="minimax">Hailuo 海螺</option>
+            <option value="zhipu">CogVideoX 智谱</option>
+            <option value="mock">Mock 程序化（免费）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>配音</label>
+          <select id="voiceProvider">
+            <option value="edge">Edge TTS（免费神经）</option>
+            <option value="elevenlabs">ElevenLabs（付费）</option>
+            <option value="formant">Formant（离线）</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:400">
+          <input type="checkbox" id="useLlm" checked style="width:auto">
+          <span>用 LLM 智能分镜（DeepSeek）</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:400;margin-top:6px">
+          <input type="checkbox" id="draft" style="width:auto">
+          <span>Draft 模式（半分辨率，快速预览）</span>
+        </label>
+      </div>
+      <button class="btn btn-primary" id="generateBtn">生成视频</button>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-text">
+          <span id="progressMsg">准备中…</span>
+          <span id="progressPct">0%</span>
+        </div>
+      </div>
+      <div class="error-box" id="errorBox"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Provider 状态</h2>
+      <div class="provider-list" id="providerList">加载中…</div>
+      <div class="hint">未配置 key 的 provider 会标灰。在 .env 里填 key 后重启服务。</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: preview & edit -->
+  <div>
+    <div class="panel">
+      <h2>2 · 成片预览</h2>
+      <div id="videoArea">
+        <div class="video-placeholder">生成后在此预览<br><span style="font-size:11px">9:16 竖屏 · H.264 + AAC</span></div>
+      </div>
+      <div class="stat-grid" id="stats" style="display:none">
+        <div class="stat"><div class="v" id="statDur">—</div><div class="k">时长</div></div>
+        <div class="stat"><div class="v" id="statCost">—</div><div class="k">成本</div></div>
+        <div class="stat"><div class="v" id="statScenes">—</div><div class="k">场景数</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="tabs">
+        <button class="tab active" data-tab="edit">对话式改片</button>
+        <button class="tab" data-tab="publish">发布 TikTok</button>
+        <button class="tab" data-tab="log">运行日志</button>
+      </div>
+
+      <!-- Edit tab -->
+      <div id="tab-edit">
+        <div class="chat-log" id="chatLog">
+          <div class="msg system">试试：<strong>开头再炸一点</strong>、<strong>中段换成漫画风</strong>、<strong>音乐换暗黑一点</strong></div>
+        </div>
+        <div class="chat-input">
+          <input type="text" id="editInput" placeholder="描述你想要的改动…">
+          <button class="btn btn-secondary" id="editBtn">分析</button>
+        </div>
+        <div class="hint">AI 会解析你的指令 → 定位受影响的场景 → 只重渲这些场景（其余复用缓存）</div>
+      </div>
+
+      <!-- Publish tab -->
+      <div id="tab-publish" style="display:none">
+        <div class="field">
+          <label>视频标题 / 文案</label>
+          <textarea id="ttTitle" style="min-height:70px" placeholder="你的广告文案 #话题标签"></textarea>
+        </div>
+        <div class="field">
+          <label>可见性</label>
+          <select id="ttPrivacy">
+            <option value="SELF_ONLY">仅自己可见（未过审默认）</option>
+            <option value="PUBLIC_TO_EVERYONE">公开（需 TikTok 审核）</option>
+            <option value="FOLLOWER_OF_CREATOR">仅粉丝</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary" id="ttAuthBtn" style="margin-bottom:10px">① 授权 TikTok 账号</button>
+        <button class="btn btn-success" id="ttUploadBtn">② 发布到 TikTok</button>
+        <div class="hint" style="margin-top:10px">
+          需要 TIKTOK_CLIENT_KEY / SECRET。未通过 TikTok 审核的 app 只能发「仅自己可见」。
+        </div>
+        <div class="error-box" id="ttError"></div>
+      </div>
+
+      <!-- Log tab -->
+      <div id="tab-log" style="display:none">
+        <div class="log" id="logBox">等待任务…</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let currentJob = null, currentVideo = null, ws = null;
+
+// ---- tabs ----
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    ['edit','publish','log'].forEach(n => $('tab-'+n).style.display = n===t.dataset.tab?'block':'none');
+  };
+});
+
+// ---- load providers ----
+async function loadProviders() {
+  try {
+    const r = await fetch('/api/providers').then(r=>r.json());
+    const vp = r.video.providers;
+    const order = ['seedance','kling','jimeng','veo','bailian','minimax','zhipu','mock'];
+    $('providerList').innerHTML = order.map(k => {
+      const p = vp[k]; if(!p) return '';
+      const ok = p.available;
+      return `<div class="provider-item"><span>${k}</span><span class="badge ${ok?'ok':'off'}">${ok?'可用':'未配置'}</span></div>`;
+    }).join('') + `<div class="provider-item"><span>voice · ${r.voice.active}</span><span class="badge ${r.voice.available?'ok':'off'}">${r.voice.available?'可用':'未配置'}</span></div>`;
+  } catch(e) { $('providerList').textContent = '加载失败'; }
+}
+loadProviders();
+
+// ---- generate ----
+$('generateBtn').onclick = async () => {
+  const script = $('script').value.trim();
+  if (!script) { showError('请先粘贴广告脚本'); return; }
+  showError('');
+  $('generateBtn').disabled = true;
+  $('progressWrap').style.display = 'block';
+  $('stats').style.display = 'none';
+  appendLog('> 提交生成任务…');
+
+  const body = {
+    script,
+    name: 'web-' + Date.now().toString(36),
+    style: $('style').value,
+    aspect: $('aspect').value,
+    draft: $('draft').checked,
+    use_llm: $('useLlm').checked,
+    video_provider: $('videoProvider').value || null,
+    voice_provider: $('voiceProvider').value || null,
+  };
+
+  try {
+    const r = await fetch('/api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    }).then(r=>r.json());
+    currentJob = r.job_id;
+    appendLog('> job_id = ' + currentJob);
+    watchJob(currentJob);
+  } catch(e) {
+    showError('提交失败: ' + e.message);
+    $('generateBtn').disabled = false;
+  }
+};
+
+function watchJob(jobId) {
+  if (ws) ws.close();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}`);
+  ws.onmessage = ev => {
+    const d = JSON.parse(ev.data);
+    setProgress(d.progress, d.message, d.stage);
+    appendLog(`[${d.stage}] ${d.message}`);
+    if (d.done) {
+      $('generateBtn').disabled = false;
+      if (d.error) { showError(d.error); appendLog('ERROR: ' + d.error); }
+      else if (d.video_url) {
+        currentVideo = d.video_url;
+        $('videoArea').innerHTML = `<video controls src="${d.video_url}"></video>`;
+        $('stats').style.display = 'grid';
+        $('statCost').textContent = '$' + (d.cost||0).toFixed(2);
+        $('statDur').textContent = (d.total_duration ? d.total_duration.toFixed(1)+'s' : '—');
+        $('statScenes').textContent = d.scenes || '—';
+        appendLog(`> 完成: ${d.video_url} | 渲染${d.rendered||0} 复用${d.reused||0}`);
+      }
+      ws.close();
+    }
+  };
+  ws.onerror = () => { pollFallback(jobId); };
+}
+
+function pollFallback(jobId) {
+  const t = setInterval(async () => {
+    const d = await fetch('/api/jobs/'+jobId).then(r=>r.json());
+    setProgress(d.progress, d.message, d.stage);
+    if (d.done) {
+      clearInterval(t);
+      $('generateBtn').disabled = false;
+      if (d.error) showError(d.error);
+      else if (d.video_url) {
+        currentVideo = d.video_url;
+        $('videoArea').innerHTML = `<video controls src="${d.video_url}"></video>`;
+        $('stats').style.display = 'grid';
+        $('statCost').textContent = '$' + (d.cost||0).toFixed(2);
+      }
+    }
+  }, 1500);
+}
+
+function setProgress(p, msg, stage) {
+  $('progressFill').style.width = Math.round((p||0)*100) + '%';
+  $('progressPct').textContent = Math.round((p||0)*100) + '%';
+  $('progressMsg').textContent = msg || '';
+}
+
+function showError(m) {
+  const b = $('errorBox');
+  if (!m) { b.style.display='none'; return; }
+  b.textContent = m; b.style.display='block';
+}
+function appendLog(s) {
+  const l = $('logBox');
+  l.textContent += '\n' + s;
+  l.scrollTop = l.scrollHeight;
+}
+
+// ---- conversational edit ----
+$('editBtn').onclick = async () => {
+  const instr = $('editInput').value.trim();
+  if (!instr) return;
+  if (!currentJob) { addMsg('system','请先生成一个视频',' '); return; }
+  addMsg('user', instr, '');
+  $('editInput').value = '';
+  addMsg('system', '分析中…', '');
+  try {
+    const r = await fetch('/api/edit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({job_id: currentJob, instruction: instr, use_llm: true})
+    }).then(r=>r.json());
+    const last = $('chatLog').lastElementChild;
+    last.innerHTML = `<strong>${r.intent}</strong> · 影响 ${r.scene_ids.length} 个场景<br>` +
+      r.ops.map(o=>`<code>${o.path} = ${JSON.stringify(o.value)}</code>`).join('<br>') +
+      `<div class="meta">${r.explanation||''}</div>`;
+    appendLog(`[edit] ${r.intent} → ${r.scene_ids.length} scenes`);
+  } catch(e) {
+    addMsg('system','分析失败: '+e.message,'');
+  }
+};
+$('editInput').addEventListener('keydown', e => { if(e.key==='Enter') $('editBtn').click(); });
+
+function addMsg(role, text, meta) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + role;
+  d.innerHTML = text + (meta?`<div class="meta">${meta}</div>`:'');
+  $('chatLog').appendChild(d);
+  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+}
+
+// ---- tiktok ----
+$('ttAuthBtn').onclick = async () => {
+  try {
+    const r = await fetch('/api/tiktok/auth-url').then(r=>r.json());
+    window.open(r.auth_url, '_blank', 'width=800,height=700');
+    addMsg('system','已打开 TikTok 授权页，完成后回到这里发布。','');
+  } catch(e) { $('ttError').textContent = '未配置 TIKTOK_CLIENT_KEY'; $('ttError').style.display='block'; }
+};
+
+$('ttUploadBtn').onclick = async () => {
+  if (!currentVideo) { $('ttError').textContent='请先生成视频'; $('ttError').style.display='block'; return; }
+  $('ttError').style.display='none';
+  try {
+    const r = await fetch('/api/tiktok/upload', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        video_path: currentVideo.replace('/api/video/','demo/out/web/'),
+        title: $('ttTitle').value,
+        privacy_level: $('ttPrivacy').value
+      })
+    }).then(r=>r.json());
+    if (r.ok) { addMsg('system','已提交 TikTok: '+JSON.stringify(r.result),''); appendLog('> tiktok: '+JSON.stringify(r.result)); }
+    else throw new Error(r.detail||'上传失败');
+  } catch(e) {
+    $('ttError').textContent = e.message; $('ttError').style.display='block';
+  }
+};
+</script>
+</body>
+</html>

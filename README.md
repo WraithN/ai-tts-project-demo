@@ -118,7 +118,38 @@ avb render script.txt [--draft] [--llm] [--style X] [--only s001,s002]
 avb edit   project.json "make it punchier" [--rules-only]
 avb providers               what is wired up and whether it is live
 avb tts "hello world"       quick voice test
+avb web                     launch the browser UI
 ```
+
+---
+
+## Web app
+
+Browser UI over the same pipeline: paste a script, pick a model, watch it
+render, revise it in natural language, publish to TikTok.
+
+```bash
+python -m pip install -e ".[web]"
+python -m avb.cli web                 # -> http://127.0.0.1:8787
+```
+
+| | |
+|---|---|
+| **Step 1** | paste the script, pick style / aspect / video model / voice |
+| **Step 2** | generate; watch progress; preview the finished 9:16 cut |
+| **Step 3** | chat to revise (`make the hook punchier`) — see which scenes it targets |
+| **Step 4** | authorize a TikTok account and publish (see limits below) |
+
+Video models are selectable in the UI: **Seedance**, **Kling**, **Jimeng**,
+**Veo**, **Wan**, **Hailuo**, **CogVideoX**, or the offline `mock`. Whichever
+you pick, it is one config change — same `Provider` interface.
+
+**TikTok caveat**: the Content Posting API forces every post to `SELF_ONLY`
+(private) until your app passes TikTok's Content Posting Audit, which takes
+2–6 weeks and rejects apps framed as personal account tools. Budget for the
+audit, or use the private mode to validate the pipeline first.
+
+Full guide: **`docs/WEBAPP.md`**.
 
 ---
 

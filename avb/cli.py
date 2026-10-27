@@ -407,6 +407,19 @@ def cmd_tts(args) -> int:
     return 0
 
 
+def cmd_web(args) -> int:
+    """Launch the FastAPI web app (see docs/WEBAPP.md)."""
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        print("web app needs extra deps:  pip install -e '.[web]'", file=sys.stderr)
+        return 1
+
+    from .webapp import run_server
+
+    return run_server(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+
 # --------------------------------------------------------------------------
 # entry
 # --------------------------------------------------------------------------
@@ -477,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("text")
     t.add_argument("--preset", help="voice preset name or edge voice id")
     t.set_defaults(func=cmd_tts)
+
+    w = sub.add_parser("web", help="launch the web app (browser UI + API)")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=8787)
+    w.add_argument("--no-browser", action="store_true")
+    w.set_defaults(func=cmd_web)
 
     return p
 
