@@ -130,25 +130,17 @@ def push(repo: str, token: str, branch: str = "main") -> str:
     print(f"uploading {len(files)} blobs ...")
     tree_entries = []
     for i, (path, local_sha) in enumerate(files, 1):
-        raw = git("cat-file", "blob", local_sha)
-        # cat-file gives raw bytes; redo via subprocess bytes to be safe
         raw_bytes = subprocess.run(
             ["git", "cat-file", "blob", local_sha],
             cwd=ROOT,
             capture_output=True,
             check=True,
         ).stdout
-        is_binary = b"\0" in raw_bytes[:8000]
-        if is_binary:
-            payload = {
-                "encoding": "base64",
-                "content": base64.b64encode(raw_bytes).decode(),
-            }
-        else:
-            payload = {
-                "encoding": "base64",
-                "content": base64.b64encode(raw_bytes).decode(),
-            }
+        # base64 works for both text and binary; the API decodes it either way
+        payload = {
+            "encoding": "base64",
+            "content": base64.b64encode(raw_bytes).decode(),
+        }
         status, blob = _request(
             "POST", f"{API}/repos/{owner}/{name}/git/blobs", token, payload
         )
