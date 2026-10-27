@@ -1,0 +1,518 @@
+# Case Study — AI Video Ad Production Platform
+
+> **用途**：Upwork 作品集案例页 + 提案素材 + demo 旁白脚本。
+> 正文是**英文可直接粘贴**的部分；`> 注：` 开头的是给你看的中文使用说明，不要贴出去。
+
+---
+
+## 0. 30 秒电梯陈述（Upwork 项目标题 / 个人简介用）
+
+**EN（可直接用）**
+
+> **AI Video Builder — Script-to-Video Ad Pipeline with Conversational Editing**
+> Built an end-to-end system that turns a 1–5 minute direct-response script into a
+> finished, Meta-ready video ad: automatic scene breakdown, word-timed voiceover,
+> kinetic captions, music, SFX, and pattern interrupts. Revise it by talking to it —
+> "make the first 10 seconds punchier" re-renders 3 of 20 scenes and leaves the rest
+> byte-identical.
+
+**一句话版（提案开头 / 作品集卡片）**
+
+> Script → SceneGraph IR → Meta-ready MP4. Edit by chatting; only the scenes that
+> actually changed get re-rendered.
+
+> 注：标题里带 "conversational editing" 是刻意的——招聘文把这一条标成 *Extremely
+> Important*，是全篇唯一的最高级。谁先在标题里兑现它，谁先被读到。
+
+---
+
+## 1. 招聘文对照表（Case → Deliverable）
+
+> 注：这张表是给你自己看的「需求覆盖度」自检，也可以整段贴进提案当"我读懂了你的需求"。
+> 不要吹没做的部分——最后一列就是诚实栏。
+
+| 客户要什么 | 这个 demo 里有什么 | 状态 |
+|---|---|---|
+| 贴脚本 → 选风格 → 出成片 | `avb render script.txt --style dr_vsl` | ✅ 真跑通 |
+| 9 种视频风格 | 9 个风格渲染参数包，实测 4 条（DR VSL / comic / vector / claymation）+ talking-head 等 5 条留了接口 | ✅ 部分实测 |
+| 单片内混风格 | `visual.style` 挂在 Scene 上，不是项目级 | ✅ |
+| 自动拆场景 | LLM（DeepSeek）+ 规则兜底 | ✅ |
+| 自动配 VO | edge-tts 神经语音，**词级时间轴** | ✅ |
+| 动画字幕 / kinetic typography | Pillow 逐帧排版 + 高亮 + 折行 + pattern interrupt | ✅ |
+| 音乐 / SFX / 转场 | 程序化合成 + ducking | ✅（DSP，非生成式） |
+| 画面与 VO 同步 | 词级时间轴驱动字幕；画面按 scene 时长对齐 | ✅ |
+| **对话式编辑（Extremely Important）** | LLM 路由 → JSON patch → hash diff → 局部重渲 | ✅ **主打** |
+| 编辑单场景不重生成全片 | 1/20 ~ 3/20 重渲，其余复用缓存 | ✅ **主打** |
+| 真实 AI 视频生成 | Veo / Kling / 万相 Wan / 海螺 / CogVideoX 适配器已写，未接计费端点 | ⚙️ 插头已留 |
+| 口型同步 | IndexTTS2.5 / CosyVoice 选型已调研（`docs/PROVIDERS.md`） | 📋 规划中 |
+| Remotion / FFmpeg | FFmpeg 编码/拼接实跑；Remotion 导出路径已实现 | ✅ |
+| ComfyUI 工作流 | 未做——本 demo 走 API + 程序化，不依赖 ComfyUI | ⚪ 明说不做 |
+| 输出 Meta 投放就绪 | 9:16 / 1080×1920 / h264+aac / QC 检查安全区与时长 | ✅ |
+
+---
+
+## 2. 作品集正文（Project Description）
+
+> 注：下面这一整块是项目页的正文。分段标题保留，方便客户扫读——Upwork 上没人读长段落。
+
+### The brief
+
+High-volume DTC advertisers need finished video ads, not raw clips. The workflow
+they described is: paste a 1–5 minute script, pick a style, hit Generate, get
+something ready to run on Meta. Then revise it by talking to it.
+
+The hard part is not any single model call. It is the **third requirement**:
+*"individual scenes can be edited without regenerating the entire video."*
+That is an architecture problem, not a prompt-engineering problem.
+
+### The insight: edit the plan, never the pixels
+
+Everything downstream of the script is a **SceneGraph IR** — a JSON tree of
+scenes, each with a voiceover, a visual, a caption style, an SFX cue and a
+narrative beat (hook / problem / mechanism / proof / offer / CTA). Nothing in
+the pipeline ever edits an MP4.
+
+Every scene's rendered segment is cached under a **content hash** of its
+semantic fields + render version. When an edit instruction comes in:
+
+1. An LLM router turns the instruction into a structured `EditPlan`
+   (intent + target selector + JSON-patch ops), constrained to a whitelist.
+2. The plan patches the IR.
+3. The hashes recompute; only the scenes whose hash changed are re-rendered.
+4. The assembly step re-concatenates, re-mixes audio, and muxes.
+
+So "make the first 10 seconds punchier" is not a prompt re-run. It is a diff.
+
+### What a real edit costs
+
+Measured on a 20-scene, 60-second direct-response VSL:
+
+| Instruction | Scenes re-rendered | Cache reuse |
+|---|---|---|
+| "Spice up the hook and make the first 10 seconds punchier" | 3 / 20 | 85% |
+| "Make the mechanism section feel like a comic book" | **1 / 20** | 95% |
+| "Swap the music for something darker" | 0 / 20 visuals | 100% (audio only) |
+| "Throughout the video, make it feel more premium" | 20 / 20 | 0% |
+
+The 1/20 case is the interesting one: switching a scene's visual style touches
+no voiceover, so the TTS cache never invalidates. That falls out of hashing
+the right thing.
+
+### What is real, and what is a stand-in
+
+I would rather you hear this from me than find out later:
+
+| Layer | Status |
+|---|---|
+| IR + content-addressed cache + conversational editing | **Real. This is the deliverable.** |
+| LLM (script parse, edit routing) | **Real** — DeepSeek V4, any OpenAI-compatible endpoint |
+| TTS | **Real** — edge-tts neural voices, word-level timestamps |
+| Music / SFX | Synthesised DSP, not generative |
+| Visuals | Procedural stills + compositor motion; real video providers are implemented behind the same interface and selected by config |
+| Lip sync | Researched, not wired |
+
+The offline stand-ins exist so the pipeline runs with zero credentials and
+zero network. Everything real plugs into the same `Provider` interface —
+swapping a mock for Kling is a config change, not a rewrite.
+
+### Engineering, not a script
+
+- **Layered config**: defaults < `avb.toml` < env vars < CLI flags. Secrets
+  live in `.env` (gitignored); the config file names the env var that holds
+  each key, so the config file is safe to commit.
+- **CLI**: `avb doctor | config | parse | render | edit | providers | tts`
+- **Local HTML config page** (stdlib, no framework) with live provider status
+  and secret redaction.
+- **16 smoke tests** that run offline with no ffmpeg.
+- **Cost ledger** per provider per run, and a `max_usd_per_run` guard so a
+  mis-set key cannot burn the budget.
+- **QC gate**: caption/voiceover sync offset, silence gaps, duration drift,
+  safe-area and caption readability.
+
+### Measured, not estimated
+
+- End-to-end: script → 41.5 s finished 9:16 MP4 (h264+aac), QC PASS.
+- Parallel render across 6 processes: 217 s → 206 s. **1.05×, not 4×.** The
+  bottleneck is serial audio synthesis and GIL-bound frame compositing. I put
+  the real number in the README because a portfolio that quotes an unearned
+  4× gets found out in the first technical call.
+- Source: 36 files, ~7,400 lines of Python, 3 documents, 16 tests.
+
+---
+
+## 3. 五个申请问题的答法（Answers to the Application Questions）
+
+> 注：招聘文要求提案**必须以 "AI VIDEO BUILDER" 开头**。下面每条答案都可以单独拎进
+> 提案回复框。英文是粘贴用的，中文是策略说明。**诚实原则**：没做的写 "wired but not
+> load-tested"，不要写 "yes"。Upwork 客户的面试官一问就穿，而案例集是用来长期接单的。
+
+### Q1. Have you personally built an automated script-to-video generation system?
+
+**EN**
+
+> Yes — "AI VIDEO BUILDER". I built a script-to-video pipeline that takes a
+> 1–5 minute direct-response script and produces a finished, Meta-ready MP4:
+> automatic scene breakdown into narrative beats, word-timed voiceover,
+> kinetic captions, music, SFX, and pattern interrupts.
+>
+> It runs end-to-end today. A 20-scene, 60-second VSL renders to a 41.5 s
+> 9:16 h264+aac file with QC passing on caption sync, duration drift, and
+> safe-area. Repo: **https://github.com/WraithN/ai-tts-project-demo**
+>
+> One thing I want to be straight about: the generative *video* backends in
+> the repo are stand-ins behind a provider interface. The production logic —
+> IR, caching, editing, rendering, QC — is real and is the hard part. Real
+> Veo / Kling / Wan adapters are implemented and selected by config; they are
+> not load-tested against a live billing endpoint in this build.
+
+**中文策略**：先给 demo 链接（作品集最强武器），再主动交代 mock 层。主动坦白比被戳穿强得多，
+而且"我清楚哪层是 mock、哪层是真"本身就是专业信号。结尾那句 "not load-tested against a
+live billing endpoint" 是安全的措辞——适配器写了，只是没烧过钱测。
+
+### Q2. Systems that combine AI footage, voiceovers, captions, music, transitions into finished videos?
+
+**EN**
+
+> Yes. That assembly is exactly what the pipeline does, and it is deliberately
+> staged so each asset class is independently cacheable:
+>
+> - **Voiceover** — edge-tts neural voices with WordBoundary events, so the
+>   caption layer gets word-level timestamps rather than being guessed from
+>   character count.
+> - **Captions** — kinetic typography with per-beat styling (highlight,
+>   scale-pop, position), canvas-width line wrapping, and font auto-shrink so
+>   long words never clip.
+> - **Music & SFX** — synthesised with ducking under the voiceover envelope.
+> - **Transitions / pattern interrupts** — chosen per scene from the narrative
+>   beat, not randomly.
+> - **Assembly** — per-scene segments → concat → audio mix → mux, with an
+>   absolute-path manifest (a relative-path bug here silently produces empty
+>   output, which I found the hard way).
+>
+> The final output is a finished ad, not raw clips: 1080×1920 (or 4:5 for feed),
+> h264+aac, duration within tolerance, captions inside the Meta safe area.
+
+**中文策略**：把每个资产类的"难点"点出来（词级时间轴 vs 猜时间、折行防裁切、ducking、
+绝对路径清单）。这些细节是"我真的做过"的指纹——没做过的人写不出 ducking 和
+absolute-path manifest。
+
+### Q3. Conversational AI editing through natural language?
+
+**EN**
+
+> Yes — this is the part I designed the system around, because it is an
+> architecture problem before it is a model problem.
+>
+> Nothing in the pipeline ever edits pixels or an MP4. The editable layer is a
+> SceneGraph IR (JSON). An edit instruction goes through:
+>
+> 1. **LLM router** → structured `EditPlan` (intent + target selector + JSON
+>    patch ops), constrained to a whitelist of intents, selectors, and paths.
+>    Out-of-vocabulary values get snapped to the nearest legal one
+>    ("comic_book" → "comic") or dropped — a model that invents a style name
+>    must not reach the renderer.
+> 2. **Three-level targeting**: explicit timestamp > narrative beat
+>    (hook/mechanism/proof/CTA) > whole video. DR advertisers say "the middle
+>    drags", not "scenes 11 through 18".
+> 3. **Patch the IR → recompute content hashes → re-render only what changed.**
+>
+> Measured on a 20-scene VSL:
+>
+> | Instruction | Re-rendered |
+> |---|---|
+> | "Make the first 10 seconds punchier" | 3 / 20 |
+> | "Make the mechanism section a comic book" | **1 / 20** |
+> | "Swap the music for something darker" | 0 visuals / audio only |
+> | "Throughout the video, make it feel more premium" | 20 / 20 |
+>
+> The 1/20 case is the point: a style change touches no voiceover, so the TTS
+> cache never invalidates. That falls out of hashing the right fields, and it
+> is why the re-render cost of an edit is proportional to the edit and not to
+> the video.
+
+**中文策略**：这是**全案最关键的一答**。结构：先给洞察（架构问题不是模型问题）→ 三步链路
+→ 实测数字表 → 点出 1/20 的含义。表格一定要留——客户扫提案时眼睛停在数字上。
+
+### Q4. What technology stack would you recommend?
+
+**EN**
+
+> I would separate the stack into three layers with different churn rates:
+>
+> **Control plane (own this, it is the moat)**
+> Python 3.11+, a typed SceneGraph IR, content-addressed cache keyed on
+> semantic fields + render version, a structured edit-plan format, version
+> tree for rollback, cost ledger. Layered config (defaults < file < env < CLI).
+>
+> **Generation plane (rent this, it will change)**
+> - *Voice*: edge-tts for volume (free, neural, word-level boundaries) /
+>   ElevenLabs when an SLA matters / IndexTTS2.5 or CosyVoice2 for
+>   duration-controlled or cloned voices where lip sync is needed.
+> - *Footage*: Veo / Kling / MiniMax Hailuo / Tongyi Wan / CogVideoX behind one
+>   adapter interface. Wan is the only major open-weights option (Apache 2.0),
+>   so it is the escape hatch if API pricing or access moves.
+> - *Stills / illustration*: FLUX-class image models for the comic / vector /
+>   claymation routes — these are cheaper and far more controllable than
+>   generated video, and they are the most reliable styles in the matrix.
+>
+> **Render plane (own this too)**
+> FFmpeg for encode/concat/mux, Pillow or Remotion for composition. Remotion
+> earns its place if you want a web-based review UI later; FFmpeg alone is
+> enough for production output.
+>
+> I would *not* put ComfyUI in the critical path. It is excellent for
+> prototyping generative workflows, but a production pipeline needs typed
+> contracts, retries, cost caps, and cache semantics that a node graph does
+> not give you. I would use it as a model-lab that exports into the same
+> provider interface.
+>
+> LLM for the edit router: any OpenAI-compatible endpoint (DeepSeek, GPT,
+> Claude via adapter, or a local vLLM). The router must be schema-constrained
+> — free-form model output is how these systems quietly corrupt projects.
+
+**中文策略**：分三层（control / generation / render）是这套答案的骨架——它传达"我知道什么该自建、
+什么该租"。主动反对 ComfyUI 进关键路径是个**敢给意见**的信号；但要给出替代方案（当 model-lab），
+否则听起来像没用过。最后 schema-constrained 是行业老手才说的话。
+
+### Q5. How long for a working POC (1–3 min script → polished DR ad)?
+
+**EN**
+
+> A meaningful POC — one full style path end-to-end, plus conversational
+> editing that demonstrably does not re-render the whole video — is a
+> **2–3 week** engagement. I have already built the spine of it, so the POC
+> time goes into your content, your brand constraints, and live provider
+> integration rather than into inventing the architecture.
+>
+> Scope I would propose for the POC:
+>
+> - **In**: one style path (DR VSL) fully productionised; script → finished
+>   9:16 MP4; word-timed VO + kinetic captions + music/SFX; conversational
+>   editing with measured partial re-render; cost accounting per video; a
+>   simple web or CLI entry point.
+> - **Deliberately out**: all 9 styles, lip sync, character consistency,
+>   multi-video batch orchestration, and a full review UI.
+>
+> Reason for that boundary: the 9-style matrix is a *spreadsheet* problem once
+> the IR and provider layer are right — most of those styles are parameter
+> packs on the same render path. Spending POC budget on 9 styles before the
+> editing loop is proven would be the wrong order.
+>
+> After the POC: style matrix, character consistency, lip sync, batch
+> generation and a review UI are incremental, each on top of a stable IR.
+
+**中文策略**：2–3 周，不要写 1 周（显得没做过）也不要写 8 周（被划走）。关键是
+"I have already built the spine" —— 这句话把 POC 报价从"研发费"变成"集成费"，客户更容易批。
+边界（in/out）那段是防止 scope creep 的合同性语言，必须留。
+
+---
+
+## 4. Demo 旁白脚本（Walkthrough Script）
+
+> 注：如果你要录屏，这就是口播稿。对着 `demo/run_demo.py` 的 7 个阶段录，每段 15–25 秒，
+> 总长控制在 2 分 30 秒内。英文口播稿，中文是镜头指示。
+
+---
+
+**(0:00) 开场 — 先给结论**
+
+> `SCRIPT → IR → MP4. And edits don't re-render the video — they re-render a diff.`
+
+镜头：终端打 `python -m avb.cli doctor`，绿勾滚出来。
+
+---
+
+**(0:15) 生成**
+
+> Paste a 1–5 minute direct-response script. The parser breaks it into
+> scenes tagged by narrative beat — hook, problem, mechanism, proof, offer,
+> call to action. Then each scene gets a voiceover with word-level timestamps,
+> kinetic captions, music and sound effects, and it renders to a finished
+> 9:16 Meta-ready MP4.
+
+镜头：`avb render demo/scripts/vsl_supplement.txt --draft` → 进度条 → 播放成片前 10 秒。
+
+---
+
+**(0:45) 对话式编辑 — 用真实例子**
+
+> Now the part I care about. I say: *"Spice up the hook and make the first 10
+> seconds punchier."* The router maps that to a pacing change on the hook
+> scenes only. Watch the render log — three scenes re-render out of twenty.
+> Everything else comes back byte-identical from cache.
+
+镜头：终端 `avb edit ...`，日志滚出 `reused 17/20`。
+
+---
+
+**(1:15) 风格切换 — 1/20**
+
+> Now a style change: *"Make the mechanism section feel like a comic book."*
+> One scene re-renders. The voiceover doesn't move at all — it is not in the
+> hash for a style change. That's not a trick; it's what you get when you
+> hash the right fields.
+
+镜头：`--only s008` 渲染，对比前后画面（comic 版 vs 原版）。
+
+---
+
+**(1:40) 风格矩阵**
+
+> Same IR, different render parameters. Direct-response VSL, comic book,
+> vector, claymation — one video can even mix them, because the style lives
+> on the scene, not on the project.
+
+镜头：`contact_sheet.png` + 四条成片并排快剪。
+
+---
+
+**(2:00) 收尾 — 诚实声明 + 邀请**
+
+> What's real: the IR, the cache, the edit router, the render pipeline, the
+> QC gate, and the neural voiceover. What's a stand-in: the generative video
+> backends, behind the same provider interface. Give me a API key and the
+> mocks turn into Kling or Wan without touching the pipeline. Happy to walk
+> through the code.
+
+镜头：README 的 "What is real, what is not" 表格。
+
+---
+
+## 5. 提案开场白（Proposal Opener）
+
+> 注：招聘文强制要求以 "AI VIDEO BUILDER" 开头，不写直接被筛掉。以下三版按申请时间
+> 早晚选用——越晚申请，越要短（客户已经看了 50 份长的）。
+
+**A 版（标准，推荐）**
+
+> **AI VIDEO BUILDER**
+>
+> I've built the system you're describing — script in, finished Meta-ready
+> video ad out — and I built it around the requirement everyone else will
+> hand-wave: *"individual scenes can be edited without regenerating the
+> entire video."*
+>
+> Demo + code: https://github.com/WraithN/ai-tts-project-demo
+>
+> The short version: the editable layer is a JSON scene graph, never the
+> pixels. An edit instruction becomes a structured patch; the pipeline
+> re-renders only the scenes whose content hash actually changed. On a
+> 20-scene VSL: "make the first 10 seconds punchier" → 3 scenes. "Make the
+> mechanism section a comic book" → **1 scene**. "Swap the music" → 0
+> visuals.
+>
+> Direct answers to your five questions are in the repo README and I'm happy
+> to give them inline. For the POC I'd scope one style path (DR VSL) fully
+> productionised plus the conversational edit loop, 2–3 weeks — the
+> architecture spine is already built, so the time goes into your content
+> and live provider keys, not into inventing the pipeline.
+>
+> Open to a paid POC, and to jumping on a call with the code on screen.
+
+**B 版（短，适合 48 小时后投递）**
+
+> **AI VIDEO BUILDER**
+>
+> Built it. Script → SceneGraph IR → finished Meta-ready MP4, with
+> conversational editing that re-renders a diff instead of the video:
+> https://github.com/WraithN/ai-tts-project-demo
+>
+> Measured on a 20-scene VSL: "make the first 10 seconds punchier" re-renders
+> 3 scenes; "make the mechanism section a comic book" re-renders **1**; a
+> music swap re-renders 0 visuals. That last part — "edit a scene without
+> regenerating the video" — is the requirement I designed the architecture
+> around, and it is an IR + content-hash problem, not a prompt trick.
+>
+> Happy to answer your five questions on a call with the repo open. POC: one
+> style path fully productionised + the edit loop, 2–3 weeks.
+
+**C 版（对话式，适合客户已经约聊）**
+
+> **AI VIDEO BUILDER**
+>
+> Before I answer your five questions — do you want me to show you the
+> edit loop first? I can share my screen and change a rendered video with
+> one sentence, and you'll watch the log say "1 of 20 scenes re-rendered."
+> That single behaviour is the difference between the system you asked for
+> and a slideshow generator, and it's the thing I'd want to see if I were
+> in your seat.
+
+---
+
+## 6. 反问清单（Discovery Questions）
+
+> 注：Upwork 上会反问的人显得做过。挑 2–3 条放进提案末尾，不要全问。
+
+1. **Volume**: Roughly how many finished ads per week does this need to
+   produce in month 3? Unit economics only work at a known volume — the
+   per-video API cost is a different conversation at 10/week vs 500/week.
+2. **Approval**: Does "minimal human intervention" mean zero-approve
+   straight to Meta, or is there a human review gate before publish? This
+   changes the QC threshold and the review UI scope.
+3. **Brand constraints**: Do you have a fixed font/colour/lower-third system,
+   or should the pipeline derive per-brand presets from a reference video?
+4. **Existing assets**: Do you have a B-roll / UGC library the pipeline
+   should search first and only generate when nothing matches? Sourcing beats
+   generation on cost and on legal exposure.
+5. **Compliance**: Who owns Meta ad-policy and FTC claim review on the
+   generated output? For DTC health/ supplement creative, I'd want a
+   claims-lint step before render, not after.
+
+---
+
+## 7. 报价框架（Pricing Frame）
+
+> 注：只是给你心里的锚，不要直接贴给客户。灵活预算的客户更要先给范围再给价。
+
+| 阶段 | 范围 | 报价锚 | 周期 |
+|---|---|---|---|
+| **Paid POC** | 1 条风格路径端到端 + 对话式编辑闭环 + 成本账本 | $3k–6k（固定价） | 2–3 周 |
+| **Production v1** | 9 风格参数包 + 批量 + 审阅 UI + 真视频 API 接入 | $15k–30k | 4–6 周 |
+| **Retainer** | 新风格 / 新供应商 / 优化 CTR | $3k–6k/月 | 长期 |
+
+定价逻辑：POC 用固定价（客户风险可控，容易批），扩展阶段按范围报价，
+retainer 收"持续接入新模型"的钱——视频模型半年一换，这钱会一直产生。
+
+---
+
+## 8. 演示素材清单（What to Have Ready）
+
+| 素材 | 状态 | 用途 |
+|---|---|---|
+| GitHub 仓库（本仓库） | ✅ | 提案链接 |
+| `demo/out/contact_sheet.png` | ✅ | 风格矩阵一眼看懂 |
+| 4 条成片 mp4 | ✅ | 作品集缩略图 / 剪进 demo 视频 |
+| 2 分 30 秒录屏（按第 4 节脚本） | ⬜ 待录 | **最值钱的一件** |
+| `demo/scripts/vsl_supplement.txt` | ✅ | 客户问"用什么脚本测的" |
+| 成本截图（`avb providers` + cost ledger） | ✅ | 回答"单条多少钱" |
+
+> 注：录屏是唯一还没有的高价值素材。录的时候务必**让日志把 `reused 17/20` 滚出来**——
+> 那一行字比任何解说都有说服力。
+
+---
+
+## 9. 诚实声明（Honesty Note）
+
+> 注：这一节**不贴给客户**，是你自己心里的红线。案例集是用来长期接单的，一次性吹爆
+> 会毁掉整个作品集的可信度。
+
+**可以写的**：
+- 我建了完整的 IR + 缓存 + 编辑 + 渲染 + QC 管线
+- LLM 和 TTS 是真的在跑（DeepSeek + edge-tts）
+- 对话式编辑的局部重渲是实测数字
+- 真视频供应商适配器已实现、由配置切换
+
+**不能写的**：
+- ❌ "已接产线级 Veo/Kling"（没测过计费端点）
+- ❌ "9 种风格全部实测"（实测 4 条，其余留了接口）
+- ❌ "做过口型同步"（只做了选型调研）
+- ❌ "有 Meta 投放实操经验"（没有就是没有）
+- ❌ 任何拿估算冒充实测的数字（性能那条 1.05× 必须写实测）
+
+**被问到 mock 怎么答**：
+> "The generative backends are behind a provider interface with stand-ins so
+> the pipeline runs with zero credentials. The production logic is real and
+> is the hard part. Point me at a Kling or Wan key and the stand-ins turn
+> into real footage without touching the pipeline."
+
+坦白 + 立刻给出"怎么变真"的路径，比遮掩好十倍。
