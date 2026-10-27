@@ -23,6 +23,7 @@ demo/out/
 
 # node / frontend
 node_modules/
+*.tsbuildinfo
 # ...but the React build output is committed so `avb web` works without npm
 !web/static/dist/
 
