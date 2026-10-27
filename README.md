@@ -26,6 +26,10 @@ The offline formant voice and procedural video exist so the pipeline runs
 with zero credentials and zero network. Everything real plugs into the same
 `Provider` interface, so swapping is a config change, not a rewrite.
 
+See **`docs/CASE_STUDY.md`** for the Upwork portfolio case study: answers
+to the five application questions, a demo walk-through script, proposal
+openers, and what is real vs stand-in.
+
 See **`docs/PROVIDERS.md`** for the 2026 TTS and video-generation landscape
 (pricing, licenses, what actually runs on a laptop GPU).
 
