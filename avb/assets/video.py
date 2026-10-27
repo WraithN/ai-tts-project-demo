@@ -1,15 +1,14 @@
 """Motion footage providers.
 
-MockVideo
-    Offline. Returns a deterministic still; the composer supplies the motion
-    (Ken Burns, punch-zoom, pan). Rendering motion at composite time rather
-    than baking it into a clip is deliberate: it means changing "zoom_in" to
-    "punch" costs zero generation.
+Every provider here is a *hosted* model: Veo 3.1, Kling 3.0, Seedance,
+Hailuo, Wan, CogVideoX, Jimeng. There is deliberately no offline stand-in --
+a fake clip would produce a video that looks finished and isn't, which is
+worse than failing loudly. When nothing is configured, `build_video_provider`
+raises `ProviderUnavailable` naming the exact env vars to fill in.
 
-Real adapters (Veo 3.1, Kling 3.0, Runway Gen-4.5, Seedance) all share the
-same call shape and are selected by env var. Note that every one of them is
-*asynchronous*: POST -> job id -> poll/webhook -> download. The orchestrator
-owns the queue; providers must stay pure.
+All of them share the same call shape and are selected by env var. Note that
+every one of them is *asynchronous*: POST -> job id -> poll -> download. The
+orchestrator owns the queue; providers must stay pure.
 """
 
 from __future__ import annotations
@@ -23,15 +22,25 @@ from pathlib import Path
 import requests
 
 from ..hashing import short_hash
-from ..styles import get_style
 from .base import Cache, Cost, Provider
-from .image import background
 
 __all__ = [
-    "MockVideo", "VeoVideo", "KlingVideo",
+    "VeoVideo", "KlingVideo",
     "BailianVideo", "MiniMaxVideo", "ZhipuVideo", "JimengVideo", "SeedanceVideo",
-    "VideoResult", "build_video_provider",
+    "VideoResult", "build_video_provider", "ProviderUnavailable",
 ]
+
+
+class ProviderUnavailable(RuntimeError):
+    """Raised when no video provider has credentials.
+
+    Carries `missing` so callers (CLI doctor, web settings) can render a
+    precise "set these variables" list instead of a bare failure.
+    """
+
+    def __init__(self, message: str, missing: dict[str, tuple[str, ...]] | None = None):
+        super().__init__(message)
+        self.missing = missing or {}
 
 
 @dataclass
@@ -40,34 +49,6 @@ class VideoResult:
     duration: float
     cached: bool
     cost: Cost
-
-
-class MockVideo(Provider):
-    """Offline still + composer-side motion."""
-
-    name = "mock-video"
-    kind = "video"
-    price_per_sec = 0.0
-
-    def available(self) -> bool:
-        return True
-
-    def price(self, seconds: float = 0.0, **_: object) -> float:
-        return 0.0
-
-    def generate(self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int, cache: Cache) -> VideoResult:
-        spec = get_style(style)
-        key = short_hash({"prompt": prompt, "style": style, "seed": seed, "w": w, "h": h})
-        hit = cache.get("video", key, ".png")
-        if hit:
-            return VideoResult(path=hit, duration=seconds, cached=True, cost=Cost(self.name, "video", 0.0))
-
-        img = background(spec.bg_style, seed, int(w * 1.25), int(h * 1.25), spec.palette)
-        tmp = cache.root / "video" / f"tmp_{os.getpid()}_{key}.png"
-        tmp.parent.mkdir(parents=True, exist_ok=True)
-        img.save(tmp)
-        final = cache.put("video", key, ".png", tmp)
-        return VideoResult(path=final, duration=seconds, cached=False, cost=Cost(self.name, "video", 0.0, seconds))
 
 
 class _AsyncVideoBase(Provider):
@@ -586,7 +567,6 @@ class SeedanceVideo(_AsyncVideoBase):
 # --------------------------------------------------------------------------
 
 _REGISTRY: dict[str, type] = {
-    "mock": MockVideo,
     "veo": VeoVideo,
     "kling": KlingVideo,
     "bailian": BailianVideo,
@@ -600,16 +580,40 @@ _REGISTRY: dict[str, type] = {
     "seedance": SeedanceVideo,
 }
 
+# Probe order when the caller says `auto`. Roughly: cheapest-good first.
+_DEFAULT_ORDER = ("seedance", "kling", "jimeng", "veo", "bailian", "minimax", "zhipu")
+
+
+def required_envs(key: str) -> tuple[str, ...]:
+    """Env vars a provider needs before it can be used."""
+    cls = _REGISTRY.get(key)
+    if cls is None:
+        return ()
+    out: list[str] = []
+    for attr in ("env_key", "env_key_secret"):
+        v = getattr(cls, attr, "")
+        if v:
+            out.append(v)
+    return tuple(out)
+
 
 def build_video_provider(prefer: str | None = None) -> Provider:
-    """Pick the first available provider.
+    """Pick the first provider that actually has credentials.
 
-    `AVB_VIDEO_PROVIDER` forces a specific one; otherwise we fall back down
-    the list. Falling back is the entire point of the abstraction -- when a
-    vendor kills an API (see: Sora 2, Sept 2026) the pipeline keeps running.
+    `AVB_VIDEO_PROVIDER` (or `prefer`) forces a specific one; otherwise we
+    walk `_DEFAULT_ORDER`. There is no offline fallback: if nothing is
+    configured we raise `ProviderUnavailable` listing what to set, because
+    silently producing fake footage would ship a broken ad.
+
+    Falling back across *configured* vendors is still the point of the
+    abstraction -- when a vendor kills an API (see: Sora 2, Sept 2026) the
+    pipeline keeps running on the next one.
     """
-    order = [prefer or os.environ.get("AVB_VIDEO_PROVIDER") or "mock"]
-    order += [k for k in ("veo", "kling", "jimeng", "seedance", "bailian", "minimax", "zhipu", "mock") if k not in order]
+    want = (prefer or os.environ.get("AVB_VIDEO_PROVIDER") or "auto").strip().lower()
+    order: list[str] = [] if want in ("", "auto") else [want]
+    order += [k for k in _DEFAULT_ORDER if k not in order]
+
+    missing: dict[str, tuple[str, ...]] = {}
     for key in order:
         cls = _REGISTRY.get(key)
         if not cls:
@@ -617,4 +621,19 @@ def build_video_provider(prefer: str | None = None) -> Provider:
         inst = cls()
         if inst.available():
             return inst
-    return MockVideo()
+        missing[key] = required_envs(key)
+
+    if want not in ("", "auto") and want in missing:
+        env_list = ", ".join(missing[want]) or "(none)"
+        known = ", ".join(sorted(_REGISTRY))
+        raise ProviderUnavailable(
+            f"video provider '{want}' is not configured. Set: {env_list}. "
+            f"Known providers: {known}",
+            missing,
+        )
+
+    env_list = "; ".join(f"{k}: {', '.join(v) or '(none)'}" for k, v in missing.items())
+    raise ProviderUnavailable(
+        f"No video provider configured -- set at least one of: {env_list}",
+        missing,
+    )

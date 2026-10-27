@@ -132,7 +132,6 @@ pipeline works beats three hours of local inference.
 
 | Provider | Class | Status |
 |---|---|---|
-| `mock` | `MockVideo` | ✅ used, offline, procedural |
 | `kling` | `KlingVideo` | ✅ adapter implemented, needs `KLING_API_KEY` |
 | `veo` | `VeoVideo` | ✅ adapter implemented, needs `GOOGLE_API_KEY` |
 | `jimeng`/`dreamina` | `JimengVideo` | ✅ adapter implemented, needs `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` |
@@ -209,14 +208,15 @@ which hard-caps spend on a run.
 
 ### What to use for a portfolio case
 
-1. **mock** for the engineering story — it shows the IR/caching/edit loop,
-   which is the actual deliverable.
-2. **one keyed provider** (Kling or Bailian) for a 2–3 shot hook sequence,
-   to prove the adapter is real. ~$1–2.
-3. Leave the rest on mock, and be explicit about which shots are generated.
+1. **One keyed provider** (Seedance or Kling) for the whole reel, so every
+   shot is real footage. A 60s ad is ~8–12 clips ≈ $1–4 on Seedance mini.
+2. **Keep the run small first.** `--draft` at half resolution proves the
+   loop end-to-end for cents before you spend on final quality.
+3. Be explicit about what is real: today *all* footage is generated, captions
+   and voiceover are rendered locally.
 
-Honesty beats a fully fake reel. The architecture is what gets you the
-interview; a single real Kling clip is what stops the interviewer from
+Honesty beats a polished fake. The architecture is what gets you the
+interview; a reel of real generated clips is what stops the interviewer from
 asking "but does it actually call a model?"
 
 ---

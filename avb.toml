@@ -45,15 +45,18 @@ speed = 1.0
 energy = 1.0
 
 [video]
-# auto | mock | kling | veo | bailian | minimax | vidu | jimeng | zhipu
-#   mock     -> procedural stills + composer-side motion, offline, free
-#   kling    -> Kling 3.0/4.0 API (kling.ai)
-#   veo      -> Google Veo 3.1
-#   bailian -> Alibaba Bailian / Tongyi Wanxiang (Wan)
-#   minimax  -> MiniMax Hailuo
-#   vidu     -> Vidu Q3
-#   jimeng   -> ByteDance Jimeng / Seedance
-#   zhipu    -> Zhipu CogVideoX (open weights, or the hosted API)
+# auto | seedance | kling | jimeng | veo | bailian | minimax | zhipu
+# There is no offline provider: every option below is a hosted model and
+# needs its own key in .env. Unconfigured -> the run fails loudly rather
+# than shipping fake footage.
+#   seedance -> ByteDance Seedance via Volcengine Ark (SEEDANCE_API_KEY)
+#   kling    -> Kling 3.0/4.0 API (KLING_API_KEY)
+#   jimeng   -> Jimeng via Volcengine CV (VOLC_ACCESS_KEY + VOLC_SECRET_KEY)
+#   veo      -> Google Veo 3.1 (GOOGLE_API_KEY)
+#   bailian  -> Alibaba Bailian / Tongyi Wanxiang (BAILIAN_API_KEY)
+#   minimax  -> MiniMax Hailuo (MINIMAX_API_KEY)
+#   zhipu    -> Zhipu CogVideoX (ZHIPU_API_KEY)
+#   auto     -> first one that has a key, in the order listed above
 provider = "auto"
 model = ""
 clip_seconds = 5.0

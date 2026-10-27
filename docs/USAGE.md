@@ -53,7 +53,7 @@ api_key_env = "DEEPSEEK_API_KEY"
 python -m avb.cli config init                       # writes avb.toml + .env.example
 python -m avb.cli config set llm.model deepseek-v4-pro
 python -m avb.cli config set voice.voice zh-CN-XiaoxiaoNeural
-python -m avb.cli config set video.provider mock
+python -m avb.cli config set video.provider seedance
 python -m avb.cli config get llm.model
 python -m avb.cli config list                       # full effective config, JSON
 ```
@@ -83,7 +83,7 @@ Expected (with a DeepSeek key and `edge-tts` installed):
 ```
 llm connectivity   OK (deepseek-flash, 0.7s)
 voice provider     edge-tts (available)
-video provider     mock-video (available)
+video provider     seedance (available)
 ffmpeg             /usr/bin/ffmpeg
 ```
 
@@ -208,12 +208,17 @@ more (`edge-tts --list-voices`).
 
 | provider | env var | ~$/sec (API) | status |
 |---|---|---|---|
-| `mock` | — | 0 | always works, procedural |
+| `seedance` | `SEEDANCE_API_KEY` (+ `SEEDANCE_MODEL`) | 0.03–0.15 | adapter ready, default pick |
+| `jimeng` / `dreamina` | `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` | ~0.10 | adapter ready (HMAC, not Bearer) |
 | `kling` | `KLING_API_KEY` | 0.08–0.42 | adapter ready |
 | `veo` | `GOOGLE_API_KEY` | ~0.40 | adapter ready |
 | `bailian` / `wan` | `BAILIAN_API_KEY` | ~0.08 | adapter ready |
 | `minimax` / `hailuo` | `MINIMAX_API_KEY` | ~0.06 | adapter ready |
 | `zhipu` / `cogvideox` | `ZHIPU_API_KEY` | ~0.07 | adapter ready |
+
+No offline provider exists: with none of these set, `build_video_provider()`
+raises `ProviderUnavailable` naming the env vars to fill in. Set keys in
+`.env` (next to `avb.toml`) or in the web settings page — `avb web`.
 
 See `docs/PROVIDERS.md` for the full selection rationale and the open-source
 landscape.
@@ -280,7 +285,7 @@ cache.
 | `LLM not configured: set $DEEPSEEK_API_KEY` | `.env` not loaded or key missing | `avb doctor`; check `.env` sits next to `avb.toml` |
 | `LLM returned empty content` | `max_tokens` eaten by reasoning | raise `[llm].max_tokens` to 8000+ or set `effort = "low"` |
 | `llm connectivity FAILED (401)` | wrong key | re-check `DEEPSEEK_API_KEY` |
-| voice falls back to `formant-mock` | `edge-tts` not installed or no network | `pip install edge-tts`; check `avb doctor` |
+| voice falls back to `formant` | `edge-tts` not installed or no network | `pip install edge-tts`; check `avb doctor` |
 | `ffmpeg: command not found` | ffmpeg missing | install it; `avb doctor` verifies |
 | edit returns `intent: unknown` | phrasing the router did not understand | try rephrasing, or drop `--rules-only`; the LLM path handles far more than the rules |
 | render is slow | full re-render | use `--only` with the stale set from the edit; check `reused:` count |
@@ -295,9 +300,9 @@ cache.
   with an SLA.
 - **Formant voice is a synthesiser, not a model.** It exists so the pipeline
   runs with zero credentials and zero network. It sounds like 1998.
-- **The video mocks are procedural stills.** Motion is applied at composite
-  time (Ken Burns, punch-zoom) — deliberately, so changing `zoom_in` to
-  `punch` costs zero generation. Real footage needs a keyed provider.
+- **There is no offline video provider.** Every clip comes from a hosted
+  model, so a run without a key fails with the exact env var to set. Add the
+  key in the web settings page (`avb web`) or in `.env` next to `avb.toml`.
 - **Compliance is your job.** FTC endorsement guides and Meta ad policy
   apply to what you ship. This pipeline does not audit claims.
 - **Parallelism is ~1.05×.** See `docs/ARCHITECTURE.md` §6 for the measured

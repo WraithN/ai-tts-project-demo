@@ -93,8 +93,11 @@ def cmd_doctor(args) -> int:
     rows.append(("voice preset", cfg.voice.voice))
 
     # video
-    vid = build_video_provider(cfg.video.provider)
-    rows.append(("video provider", f"{vid.name} ({'available' if vid.available() else 'UNAVAILABLE'})"))
+    try:
+        vid = build_video_provider(cfg.video.provider)
+        rows.append(("video provider", f"{vid.name} (available)"))
+    except Exception as e:
+        rows.append(("video provider", f"NOT CONFIGURED -- {e}"))
 
     # render tools
     rows.append(("ffmpeg", which("ffmpeg") or "MISSING"))

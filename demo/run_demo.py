@@ -112,11 +112,26 @@ def main() -> int:
     print("\nFirst scene IR:")
     print(json.dumps(project.to_dict()["scenes"][0], indent=2, ensure_ascii=False))
 
-    pipe = Pipeline(args.workdir, draft=args.draft, workers=args.workers)
     rule("2. PROVIDERS")
+    # No offline video path exists any more, so check before building the
+    # pipeline -- otherwise the demo dies inside Pipeline.__init__ with a
+    # stack trace instead of telling you what to do.
+    from avb.assets.video import ProviderUnavailable, build_video_provider
+
+    try:
+        vid = build_video_provider()
+    except ProviderUnavailable as e:
+        print(f"video provider : NOT CONFIGURED\n\n{e}\n")
+        print("Set one key in .env, or use the web settings page (`avb web`):")
+        print("  SEEDANCE_API_KEY / KLING_API_KEY / VOLC_ACCESS_KEY+VOLC_SECRET_KEY")
+        print("  GOOGLE_API_KEY / BAILIAN_API_KEY / MINIMAX_API_KEY / ZHIPU_API_KEY")
+        print("See docs/PROVIDERS.md for where each one comes from.")
+        return 2
+
+    pipe = Pipeline(args.workdir, draft=args.draft, workers=args.workers)
     print(pipe.describe())
-    print("\n(offline mocks today; set ELEVENLABS_API_KEY / GOOGLE_API_KEY / KLING_API_KEY")
-    print(" to swap in the real generative backends -- no code changes)")
+    print("\n(every provider is a hosted model; swapping vendors is a config change,")
+    print(" never a code change)")
 
     # Stage 3 is the base for 4/5/7; run it whenever any of them are wanted.
     r1 = None

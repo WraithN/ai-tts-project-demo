@@ -128,6 +128,11 @@ avb web                     launch the browser UI
 Browser UI over the same pipeline: paste a script, pick a model, watch it
 render, revise it in natural language, publish to TikTok.
 
+The **Provider settings** panel at the top of the left column is where you
+configure vendors: pick Seedance / Kling / Jimeng / Veo / Wan / Hailuo /
+CogVideoX, paste the key, hit save. Keys land in `.env` (gitignored) and take
+effect immediately -- no restart. Nothing renders until one is configured.
+
 ```bash
 python -m pip install -e ".[web]"
 python -m avb.cli web                 # -> http://127.0.0.1:8787
@@ -141,8 +146,11 @@ python -m avb.cli web                 # -> http://127.0.0.1:8787
 | **Step 4** | authorize a TikTok account and publish (see limits below) |
 
 Video models are selectable in the UI: **Seedance**, **Kling**, **Jimeng**,
-**Veo**, **Wan**, **Hailuo**, **CogVideoX**, or the offline `mock`. Whichever
-you pick, it is one config change — same `Provider` interface.
+**Veo**, **Wan**, **Hailuo**, **CogVideoX**. Whichever you pick, it is one
+config change — same `Provider` interface. There is **no offline stand-in**:
+every provider is a hosted model and needs its own key, which you paste into
+the settings page (stored in `.env`). Unconfigured, a run fails loudly rather
+than shipping fake footage.
 
 **TikTok caveat**: the Content Posting API forces every post to `SELF_ONLY`
 (private) until your app passes TikTok's Content Posting Audit, which takes
@@ -275,7 +283,7 @@ down). Frame work is also GIL-bound, so a thread pool is worse still
 (measured 1.1x).
 
 The process pool is still worth having: it is the right shape for the real
-bottleneck the moment you swap the offline voice mock for a hosted TTS API
+bottleneck the moment you swap the offline formant synth for a hosted TTS API
 (where each segment is an HTTP round-trip and latency, not CPU, dominates).
 On Windows it needs an `if __name__ == "__main__"` guard in the caller, so
 the pool falls back to serial rendering rather than dying if it does not
@@ -299,7 +307,7 @@ reports what it spent and `CostLedger` rolls it up per run.
 | music | $0 (synth) | $0 (synth) |
 | LLM (parse + edits) | $0 (rules) | ~$0.001–0.01 (DeepSeek) |
 | **60s ad, all-real voice + 8 clips** | — | **~$4–16** |
-| **60s ad, edge-tts + mock visuals** | **~$0.001** | — |
+| **60s ad, edge-tts + Seedance mini** | — | **~$0.5–1.5** |
 
 A style change touches ~1 scene's visual and nothing else. A pacing change
 touches voiceover but reuses every visual. The cache turns "change one line"
@@ -326,11 +334,11 @@ cache.
   cost-sensitive volume; use ElevenLabs or self-hosted CosyVoice/IndexTTS
   for anything with an SLA.
 - **The formant voice is a synthesiser, not a model.** It exists so the
-  pipeline runs with zero credentials. It sounds like 1998.
-- **Video mocks are procedural stills.** Motion is applied at composite time
-  (Ken Burns, punch-zoom) — deliberately, so changing `zoom_in` to `punch`
-  costs zero generation. Real footage needs a keyed provider; the adapters
-  for Kling / Veo / Jimeng / Wan / Hailuo / CogVideoX are implemented but not yet
+  pipeline runs with zero credentials. It sounds like 1998. Use `edge-tts`
+  (free) unless you are offline.
+- **There is no offline video provider, on purpose.** A fake clip would make
+  a broken ad look finished. Adapters for Seedance / Kling / Jimeng / Veo /
+  Wan / Hailuo / CogVideoX are implemented; the video adapters are not yet
   live-tested against a billed endpoint.
 - **Compliance is your job.** FTC endorsement guides and Meta ad policy
   apply to what you ship. This pipeline does not audit claims.

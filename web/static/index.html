@@ -148,6 +148,26 @@
   .stat { background: #f8f9fa; padding: 10px; border-radius: 7px; text-align: center; }
   .stat .v { font-size: 17px; font-weight: 650; }
   .stat .k { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  /* provider settings */
+  h2.toggle { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+  h2.toggle .chev { font-size: 11px; font-weight: 400; color: var(--accent); }
+  .cfg-group {
+    border-top: 1px dashed var(--border); padding-top: 12px; margin-bottom: 14px;
+  }
+  .cfg-group:first-child { border-top: none; padding-top: 0; }
+  .cfg-title {
+    font-size: 12px; font-weight: 650; margin-bottom: 8px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .cfg-title.collapsible { cursor: pointer; color: var(--muted); }
+  .cfg-title .req {
+    font-weight: 400; font-size: 10px; color: var(--error);
+    border: 1px solid #fecaca; border-radius: 3px; padding: 0 5px;
+  }
+  .cfg-title .chev { font-size: 11px; font-weight: 400; color: var(--accent); }
+  .key-saved { font-size: 11px; color: var(--success); margin-top: 3px; }
+  code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+  input[type="password"], input[type="text"].mono { font-family: ui-monospace, Menlo, monospace; }
 </style>
 </head>
 <body>
@@ -166,6 +186,73 @@
 
   <!-- LEFT: input & config -->
   <div>
+
+    <!-- Provider configuration -->
+    <div class="panel">
+      <h2 id="configToggle" class="toggle">
+        <span>0 · Provider 配置</span>
+        <span class="chev" id="configChevron">收起</span>
+      </h2>
+      <div id="configBody">
+
+        <div class="cfg-group">
+          <div class="cfg-title">视频生成模型<span class="req">必填</span></div>
+          <div class="field">
+            <select id="cfgVideo"></select>
+            <div class="hint" id="cfgVideoNotes"></div>
+          </div>
+          <div id="cfgVideoKeys"></div>
+          <div class="field" id="cfgVideoModelWrap" style="display:none">
+            <label>模型版本</label>
+            <select id="cfgVideoModel"></select>
+          </div>
+        </div>
+
+        <div class="cfg-group">
+          <div class="cfg-title">配音</div>
+          <div class="field">
+            <select id="cfgVoice"></select>
+            <div class="hint" id="cfgVoiceNotes"></div>
+          </div>
+          <div id="cfgVoiceKeys"></div>
+        </div>
+
+        <div class="cfg-group">
+          <div class="cfg-title">LLM（分镜解析 / 对话式改片）</div>
+          <div class="field">
+            <select id="cfgLlm"></select>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>Base URL</label>
+              <input type="text" id="cfgLlmBase" placeholder="https://api.deepseek.com/v1">
+            </div>
+            <div class="field">
+              <label>Model</label>
+              <input type="text" id="cfgLlmModel" placeholder="deepseek-flash">
+            </div>
+          </div>
+          <div id="cfgLlmKeys"></div>
+        </div>
+
+        <div class="cfg-group">
+          <div class="cfg-title collapsible" id="ttToggle">
+            发布 TikTok<span class="chev" id="ttChevron">展开</span>
+          </div>
+          <div id="ttBody" style="display:none">
+            <div id="cfgPublishKeys"></div>
+            <div class="hint">未通过 Content Posting Audit 的应用只能发「仅自己可见」。</div>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary" id="saveCfgBtn">保存配置</button>
+        <div class="hint" id="cfgMsg"></div>
+        <div class="hint" style="margin-top:8px">
+          Key 写入 <code>.env</code>（不进 git）；模型选择写入 <code>avb.toml</code>。保存后立即生效，无需重启。
+        </div>
+      </div>
+    </div>
+
     <div class="panel">
       <h2>1 · 广告脚本</h2>
       <div class="field">
@@ -211,7 +298,6 @@ Forty percent off your first bottle. Tap below."></textarea>
             <option value="bailian">Wan 通义万相</option>
             <option value="minimax">Hailuo 海螺</option>
             <option value="zhipu">CogVideoX 智谱</option>
-            <option value="mock">Mock 程序化（免费）</option>
           </select>
         </div>
         <div class="field">
@@ -247,7 +333,7 @@ Forty percent off your first bottle. Tap below."></textarea>
     <div class="panel">
       <h2>Provider 状态</h2>
       <div class="provider-list" id="providerList">加载中…</div>
-      <div class="hint">未配置 key 的 provider 会标灰。在 .env 里填 key 后重启服务。</div>
+      <div class="hint" id="providerHint"></div>
     </div>
   </div>
 
@@ -328,25 +414,169 @@ document.querySelectorAll('.tab').forEach(t => {
   };
 });
 
-// ---- load providers ----
-async function loadProviders() {
-  try {
-    const r = await fetch('/api/providers').then(r=>r.json());
-    const vp = r.video.providers;
-    const order = ['seedance','kling','jimeng','veo','bailian','minimax','zhipu','mock'];
-    $('providerList').innerHTML = order.map(k => {
-      const p = vp[k]; if(!p) return '';
-      const ok = p.available;
-      return `<div class="provider-item"><span>${k}</span><span class="badge ${ok?'ok':'off'}">${ok?'可用':'未配置'}</span></div>`;
-    }).join('') + `<div class="provider-item"><span>voice · ${r.voice.active}</span><span class="badge ${r.voice.available?'ok':'off'}">${r.voice.available?'可用':'未配置'}</span></div>`;
-  } catch(e) { $('providerList').textContent = '加载失败'; }
+// ---- provider settings ----
+let SETTINGS = null;
+let uiVideo = null, uiVoice = null;  // explicit dropdown choices before saving
+
+function opt(sel, val, label) {
+  return `<option value="${sel}" ${sel===val?'selected':''}>${label}</option>`;
 }
-loadProviders();
+
+function renderKeys(containerId, spec) {
+  const box = $(containerId);
+  if (!spec || !Object.keys(spec.envs||{}).length) { box.innerHTML = ''; return; }
+  box.innerHTML = Object.entries(spec.envs).map(([name, e]) => `
+    <div class="field">
+      <label>${e.label}${e.required ? '' : '（可选）'}</label>
+      <input type="password" data-env="${name}"
+             placeholder="${e.set ? '已保存 ' + e.masked : (e.hint || name)}"
+             value="">
+      ${e.set ? `<div class="key-saved">✓ 已配置 ${e.masked}（留空表示不修改）</div>`
+              : (e.hint ? `<div class="hint">${e.hint}</div>` : '')}
+    </div>`).join('');
+}
+
+function renderSettings() {
+  const s = SETTINGS;
+
+  // --- video ---
+  const vs = s.video.specs;
+  // With `auto` and nothing configured, land on the first provider so the
+  // user can type a key straight away instead of hunting for the dropdown.
+  const vCur = uiVideo || ((s.video.selected === 'auto' && !s.video.ready)
+             ? vs[0].key : s.video.selected);
+  $('cfgVideo').innerHTML =
+    vs.map(p => opt(p.key, vCur, `${p.label} ${p.ready ? '✓' : '（未配置）'}`)).join('') +
+    opt('auto', vCur, '自动（按已配置顺序）');
+  const vSpec = vs.find(p => p.key === $('cfgVideo').value);
+  $('cfgVideoNotes').innerHTML = vSpec
+    ? `${vSpec.notes || ''}${vSpec.console ? ` <a href="${vSpec.console}" target="_blank">获取 Key ↗</a>` : ''}`
+    : '「自动」= 按已配置顺序挑选第一个可用模型。要给某家填 Key，请直接选中它。';
+  renderKeys('cfgVideoKeys', vSpec);
+  if (vSpec && vSpec.models.length) {
+    $('cfgVideoModelWrap').style.display = 'block';
+    $('cfgVideoModel').innerHTML = vSpec.models.map(m =>
+      opt(m, vSpec.model_value || vSpec.models[0], m)).join('');
+  } else {
+    $('cfgVideoModelWrap').style.display = 'none';
+  }
+
+  // --- voice ---
+  const vos = s.voice.specs;
+  const voCur = uiVoice || (s.voice.selected === 'auto' ? (s.voice.resolved || 'auto') : s.voice.selected);
+  $('cfgVoice').innerHTML = vos.map(p => opt(p.key, voCur, `${p.label}${p.ready ? ' ✓' : ''}`)).join('')
+    + opt('auto', voCur, '自动（ElevenLabs → Edge → 离线）');
+  const voSpec = vos.find(p => p.key === $('cfgVoice').value);
+  $('cfgVoiceNotes').textContent = voSpec ? (voSpec.notes || '') : '';
+  renderKeys('cfgVoiceKeys', voSpec);
+
+  // --- llm ---
+  const ls = s.llm.specs;
+  $('cfgLlm').innerHTML = ls.map(p => opt(p.key, s.llm.selected, `${p.label}${p.ready ? ' ✓' : ''}`)).join('');
+  const lSpec = ls.find(p => p.key === $('cfgLlm').value);
+  $('cfgLlmBase').value = s.llm.base_url || '';
+  $('cfgLlmModel').value = s.llm.model || '';
+  renderKeys('cfgLlmKeys', lSpec);
+
+  // --- publish ---
+  renderKeys('cfgPublishKeys', (s.publish.specs||[]).find(p => p.key === 'tiktok'));
+
+  // --- status panel ---
+  const items = vs.map(p => `<div class="provider-item"><span>${p.label}</span><span class="badge ${p.ready?'ok':'off'}">${p.ready?'可用':'未配置'}</span></div>`).join('');
+  const vline = s.video.ready
+    ? `<div class="provider-item"><span>视频 · 当前 ${s.video.active}</span><span class="badge ok">就绪</span></div>`
+    : `<div class="provider-item"><span>视频 · 未配置</span><span class="badge off">不可用</span></div>`;
+  $('providerList').innerHTML = vline + items +
+    `<div class="provider-item"><span>配音 · ${s.voice.active}</span><span class="badge ${s.voice.ready?'ok':'off'}">${s.voice.ready?'可用':'未配置'}</span></div>` +
+    `<div class="provider-item"><span>LLM · ${s.llm.selected}/${s.llm.model}</span><span class="badge ${s.llm.api_key_set?'ok':'off'}">${s.llm.api_key_set?'已配置':'未配置'}</span></div>`;
+  $('providerHint').innerHTML = s.video.ready
+    ? `密钥文件：<code>${s.env_file}</code>`
+    : `<span style="color:var(--error)">没有可用的视频 Provider，无法生成。</span> 在上方「Provider 配置」里填一个 Key。`;
+}
+
+async function loadSettings() {
+  try {
+    SETTINGS = await fetch('/api/settings').then(r => r.json());
+    renderSettings();
+  } catch (e) {
+    $('providerList').textContent = '加载失败：' + e.message;
+  }
+}
+
+$('cfgVideo').onchange = () => { uiVideo = $('cfgVideo').value; renderSettings(); };
+$('cfgVoice').onchange = () => { uiVoice = $('cfgVoice').value; renderSettings(); };
+$('cfgLlm').onchange = () => {
+  // Switching LLM vendor should not leave the other vendor's model id behind.
+  const spec = SETTINGS.llm.specs.find(p => p.key === $('cfgLlm').value);
+  const others = SETTINGS.llm.specs.filter(p => p.key !== $('cfgLlm').value);
+  if (others.some(p => p.models.includes($('cfgLlmModel').value)) || !$('cfgLlmModel').value) {
+    $('cfgLlmModel').value = (spec && spec.models[0]) || '';
+  }
+  if (!spec) return;
+  const preset = spec.key === 'deepseek' ? 'https://api.deepseek.com/v1'
+               : spec.key === 'openai' ? 'https://api.openai.com/v1' : '';
+  if (preset && others.some(p => p.key === SETTINGS.llm.selected)) $('cfgLlmBase').value = preset;
+  renderSettings();
+};
+
+$('saveCfgBtn').onclick = async () => {
+  const keys = {};
+  document.querySelectorAll('#configBody input[data-env]').forEach(i => {
+    const v = i.value.trim();
+    if (v) keys[i.dataset.env] = v;
+  });
+  const btn = $('saveCfgBtn');
+  btn.disabled = true; btn.textContent = '保存中…';
+  $('cfgMsg').textContent = '';
+  try {
+    const body = {
+      video_provider: $('cfgVideo').value,
+      voice_provider: $('cfgVoice').value,
+      llm_provider: $('cfgLlm').value,
+      llm_model: $('cfgLlmModel').value.trim() || null,
+      llm_base_url: $('cfgLlmBase').value.trim() || null,
+      video_model: ($('cfgVideoModel').value || '').trim() || null,
+      keys,
+    };
+    SETTINGS = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    }).then(r => r.json());
+    uiVideo = uiVoice = null;  // server is now the source of truth
+    renderSettings();
+    const w = SETTINGS.written || {};
+    $('cfgMsg').innerHTML = `✓ 已保存：${(w.env||[]).join(', ') || '（无新增密钥）'}` +
+      (SETTINGS.video.ready ? '' : ' · 视频 Provider 仍未就绪，请检查 Key');
+    appendLog('> 配置已保存');
+  } catch (e) {
+    $('cfgMsg').textContent = '保存失败：' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '保存配置';
+};
+
+// collapsible panels
+function wireToggle(btnId, bodyId, chevId, openWord, closeWord) {
+  $(btnId).onclick = () => {
+    const b = $(bodyId), open = b.style.display !== 'none';
+    b.style.display = open ? 'none' : 'block';
+    $(chevId).textContent = open ? closeWord : openWord;
+  };
+}
+wireToggle('configToggle', 'configBody', 'configChevron', '收起', '展开');
+wireToggle('ttToggle', 'ttBody', 'ttChevron', '收起', '展开');
+
+loadSettings();
 
 // ---- generate ----
 $('generateBtn').onclick = async () => {
   const script = $('script').value.trim();
   if (!script) { showError('请先粘贴广告脚本'); return; }
+  if (!SETTINGS || !SETTINGS.video.ready) {
+    $('configBody').style.display = 'block';
+    $('configChevron').textContent = '收起';
+    $('cfgVideo').focus();
+    showError('还没有可用的视频 Provider：请在「0 · Provider 配置」里选一家并填入 API Key 后保存。');
+    return;
+  }
   showError('');
   $('generateBtn').disabled = true;
   $('progressWrap').style.display = 'block';

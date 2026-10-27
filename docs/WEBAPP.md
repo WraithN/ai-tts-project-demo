@@ -15,6 +15,23 @@ python -m uvicorn web.server:app --port 8787
 
 左侧是输入与配置，右侧是预览与操作。
 
+### 0 · Provider 配置
+
+第一次用必须先在这里配一家视频模型 —— 项目里**没有离线兜底**，
+没配 key 点「生成视频」会直接被拦下并提示你回来配置。
+
+| 区块 | 说明 |
+|---|---|
+| 视频生成模型 | Seedance / Kling / 即梦 / Veo / Wan / Hailuo / CogVideoX / 自动。选中哪家就显示哪家需要的 key（即梦是 AccessKey+SecretKey 双 key，其余单 key） |
+| 模型版本 | 有得选的 provider（如 Seedance 的 pro / mini）在这里挑 |
+| 配音 | Edge TTS（免费）/ ElevenLabs / Formant（离线） |
+| LLM | DeepSeek 或任意 OpenAI 兼容端点，可改 Base URL 与 model |
+| 发布 TikTok | Client Key / Secret / 回调地址（折叠） |
+
+- 已配置的 key 只显示掩码，输入框**留空 = 不修改**，不会清空已有值。
+- Key 写入 `.env`（不进 git），模型选择写入 `avb.toml`。
+- 保存后立即生效：服务端同步更新 `os.environ` 并重建 LLM client，不用重启。
+
 ### 1 · 脚本与配置
 
 | 控件 | 说明 |
@@ -22,7 +39,7 @@ python -m uvicorn web.server:app --port 8787
 | 广告脚本 | 每行一句。空行分段。 |
 | 风格 | `dr_vsl` 促销直效 / `comic` 漫画 / `vector` 矢量 / `claymation` 黏土 / `talking_head` 口播 / `cinematic` 电影感 |
 | 画幅 | 9:16 竖屏（TikTok）、1:1、4:5、16:9 |
-| 视频模型 | Seedance / Kling / Jimeng / Veo / Wan / Hailuo / CogVideoX / Mock。**留空=自动按可用顺序** |
+| 视频模型 | 单次运行的覆盖选择，留空=用「0 · Provider 配置」里保存的默认值 |
 | 配音 | Edge TTS（免费神经音）/ ElevenLabs / Formant（离线） |
 | LLM 分镜 | 勾上走 DeepSeek 智能分镜；不勾走规则解析（离线、更快） |
 | Draft | 半分辨率快速预览，成片时关掉 |
@@ -83,6 +100,8 @@ python -m uvicorn web.server:app --port 8787
 | WS | `/ws/jobs/{id}` | 实时进度推送 |
 | GET | `/api/video/{file}` | 取成片 |
 | POST | `/api/edit` | 对话式改片（分析） |
+| GET | `/api/settings` | Provider 配置页数据：可选厂商、需要的 key、是否已配置（掩码） |
+| POST | `/api/settings` | 保存厂商选择与密钥（写 `avb.toml` + `.env`，热生效） |
 | GET/POST | `/api/config` | 读/写 `avb.toml` |
 | GET | `/api/providers` | Provider 可用状态 |
 | POST | `/api/tts-preview` | 试听配音 |
@@ -103,6 +122,10 @@ WebSocket 客户端在主 asyncio 循环上。所以启动时捕获主循环，w
 `asyncio.run_coroutine_threadsafe()` 调度广播。
 直接在 worker 里调 `asyncio.get_event_loop()` 会抛
 `There is no current event loop in thread` —— 这是踩过的坑。
+
+**为什么密钥不进 `avb.toml`**：toml 是会提交进 git 的配置文件，
+里面只写"用哪个 env var 存 key"。密钥统一落到 `.env`（已 gitignore），
+写入时按行替换，保留文件里原有的注释与分组。
 
 **并发**：一次一个任务最稳。多个任务同时跑会争 ffmpeg 和缓存目录；
 真要并发需要给每个 job 独立的 workdir。

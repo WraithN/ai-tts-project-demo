@@ -34,10 +34,13 @@ __all__ = [
     "load_config",
     "load_dotenv",
     "find_config_path",
+    "env_path",
+    "write_env",
     "save_config",
     "config_set",
     "DEFAULT_CONFIG_NAME",
 ]
+
 
 DEFAULT_CONFIG_NAME = "avb.toml"
 
@@ -87,7 +90,8 @@ class VoiceConfig:
 
 @dataclass
 class VideoConfig:
-    # auto | mock | kling | veo | bailian | minimax | vidu | jimeng | zhipu | local
+    # auto | seedance | kling | jimeng | veo | bailian | minimax | zhipu
+    # (no offline provider -- an unconfigured run fails loudly)
     provider: str = "auto"
     # provider-specific model id
     model: str = ""
@@ -238,6 +242,62 @@ def load_dotenv(path: str | Path | None = None, *, override: bool = False) -> Pa
                 os.environ[k] = v
         return cand
     return None
+
+
+def env_path(create: bool = False) -> Path:
+    """Where the .env lives: next to avb.toml if there is one, else cwd.
+
+    Secrets stay out of avb.toml (which is committed), so they need a home
+    of their own. One .env next to the config file keeps `avb config set`
+    and the settings page writing to the same place.
+    """
+    cfg = find_config_path()
+    base = cfg.parent if cfg else Path.cwd()
+    p = base / ".env"
+    if create and not p.exists():
+        p.write_text(
+            "# ai-video-builder secrets (gitignored)\n"
+            "# Written by the settings page / `avb config set-key`. Never commit this file.\n",
+            encoding="utf-8",
+        )
+    return p
+
+
+def write_env(mapping: dict[str, str], path: str | Path | None = None) -> Path:
+    """Write KEY=VALUE pairs into .env, preserving comments and ordering.
+
+    Line-level replacement rather than a full rewrite: users put notes and
+    grouping comments in here, and clobbering them is rude.
+    """
+    p = Path(path) if path else env_path(create=True)
+
+    existing = p.read_text(encoding="utf-8").splitlines(keepends=True) if p.is_file() else []
+    if not existing:
+        existing = ["# ai-video-builder secrets (gitignored)\n"]
+
+    out: list[str] = []
+    pending = dict(mapping)
+    for line in existing:
+        s = line.strip()
+        raw = s[7:].strip() if s.startswith("export ") else s
+        if not raw or raw.startswith("#") or "=" not in raw:
+            out.append(line)
+            continue
+        k = raw.partition("=")[0].strip()
+        if k in pending:
+            out.append(f"{k}={pending.pop(k)}\n")
+        else:
+            out.append(line)
+
+    if pending:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.append("\n# added by ai-video-builder\n")
+        for k, v in pending.items():
+            out.append(f"{k}={v}\n")
+
+    p.write_text("".join(out), encoding="utf-8")
+    return p
 
 
 def find_config_path(start: str | Path | None = None) -> Path | None:

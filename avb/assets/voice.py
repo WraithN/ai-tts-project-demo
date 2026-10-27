@@ -336,9 +336,15 @@ class VoiceResult:
 
 
 class FormantVoice(Provider):
-    """Offline placeholder voice. Always available, costs nothing."""
+    """Offline Klatt formant synthesiser. Real audio, always available, free.
 
-    name = "formant-mock"
+    It is not a placeholder -- it produces a genuine (robotic) voice with
+    accurate word-level timings. It exists because Windows SAPI is not
+    usable here, and because a pipeline that can still ship a cut with zero
+    credentials is more useful than one that hard-fails on TTS.
+    """
+
+    name = "formant"
     kind = "voice"
 
     def available(self) -> bool:
@@ -651,7 +657,6 @@ VOICE_REGISTRY: dict[str, type] = {
     "edge": EdgeVoice,
     "edge-tts": EdgeVoice,
     "formant": FormantVoice,
-    "mock": FormantVoice,
     "elevenlabs": ElevenLabsVoice,
 }
 

@@ -135,7 +135,7 @@ works offline:
 | | preferred | then | always-works |
 |---|---|---|---|
 | voice | ElevenLabs (keyed) | **edge-tts** (free, neural) | formant DSP |
-| video | Veo / Kling / Wan / Hailuo / CogVideoX | — | procedural mock |
+| video | Seedance / Kling / Jimeng / Veo / Wan / Hailuo / CogVideoX | — | none (fails loudly) |
 | music | — | — | numpy/chord synth |
 | LLM | configured endpoint | — | rule-based fallback |
 

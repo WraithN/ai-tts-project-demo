@@ -225,7 +225,7 @@ const SCHEMA = {
     ["energy", "text"]
   ],
   video: [
-    ["provider", "select", ["auto","mock","kling","veo","bailian","minimax","vidu","jimeng","zhipu"]],
+    ["provider", "select", ["auto","seedance","kling","jimeng","veo","bailian","minimax","zhipu"]],
     ["model", "text"],
     ["clip_seconds", "text"],
     ["max_usd_per_run", "text"]

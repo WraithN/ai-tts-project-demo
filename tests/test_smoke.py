@@ -178,12 +178,54 @@ def test_voice_registry_fallback():
     assert isinstance(v, FormantVoice)
 
 
-def test_video_registry_fallback():
-    from avb.assets.video import MockVideo, build_video_provider
+def test_video_provider_selection_by_env(monkeypatch):
+    """With a key present, that provider wins; with none, selection fails loudly."""
+    from avb.assets.video import KlingVideo, ProviderUnavailable, build_video_provider
 
-    v = build_video_provider("mock")
-    assert isinstance(v, MockVideo)
-    assert v.available()
+    monkeypatch.setenv("KLING_API_KEY", "k-test")
+    v = build_video_provider()
+    assert isinstance(v, KlingVideo)
+
+    monkeypatch.delenv("KLING_API_KEY", raising=False)
+    for k in ("SEEDANCE_API_KEY", "GOOGLE_API_KEY", "BAILIAN_API_KEY",
+              "MINIMAX_API_KEY", "ZHIPU_API_KEY", "VOLC_ACCESS_KEY", "VOLC_SECRET_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(ProviderUnavailable) as ei:
+        build_video_provider()
+    assert "KLING_API_KEY" in str(ei.value)
+
+
+def test_video_provider_explicit_but_unconfigured(monkeypatch):
+    from avb.assets.video import ProviderUnavailable, build_video_provider
+
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(ProviderUnavailable) as ei:
+        build_video_provider("veo")
+    assert "GOOGLE_API_KEY" in str(ei.value)
+
+
+def test_write_env_preserves_comments(tmp_path):
+    from avb.config import write_env
+
+    p = tmp_path / ".env"
+    p.write_text("# note\nFOO=bar\n\n# group\nBAZ=qux\n", encoding="utf-8")
+    write_env({"FOO": "new", "ADDED": "1"}, p)
+    text = p.read_text(encoding="utf-8")
+    assert "# note" in text and "# group" in text
+    assert "FOO=new" in text and "BAZ=qux" in text and "ADDED=1" in text
+
+
+def test_provider_specs_reference_real_envs():
+    from avb.assets.video import _REGISTRY, required_envs
+    from avb.provider_specs import VIDEO_SPECS
+
+    for spec in VIDEO_SPECS:
+        assert spec.key in _REGISTRY, f"{spec.key} has no adapter"
+        need = required_envs(spec.key)
+        assert need, f"{spec.key} declares no env var"
+        assert [e.name for e in spec.envs if e.required] == list(need)
+        for e in spec.envs:
+            assert e.name.isupper()
 
 
 def test_cache_is_content_addressed(tmp_path):

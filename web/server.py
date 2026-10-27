@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -22,12 +23,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # --- avb imports -----------------------------------------------------------
-from avb.config import Config, load_config, load_dotenv
+from avb.config import (
+    Config, load_config, load_dotenv, config_set, env_path, find_config_path,
+    write_env, save_config,
+)
 from avb.parse import parse_script, parse_script_llm
 from avb.pipeline import Pipeline
 from avb.edit import apply_plan
 from avb.llm_edit import plan_edit_llm
 from avb.edit import plan_edit
+from avb.provider_specs import (
+    VIDEO_SPECS, VOICE_SPECS, LLM_SPECS, PUBLISH_SPECS,
+    spec_for, env_status, mask,
+)
 
 load_dotenv()
 
@@ -130,6 +138,22 @@ class TikTokUploadRequest(BaseModel):
     privacy_level: str = "SELF_ONLY"  # SELF_ONLY | PUBLIC_TO_EVERYONE
 
 
+class SettingsUpdate(BaseModel):
+    """Provider selection + credentials from the settings page.
+
+    `keys` is env-var -> value (secrets). Empty values are ignored, so the
+    form can be submitted without retyping (and without wiping) a key that
+    is already set.
+    """
+    video_provider: str | None = None
+    voice_provider: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_base_url: str | None = None
+    video_model: str | None = None
+    keys: dict[str, str] = {}
+
+
 # ---------------------------------------------------------------------------
 # Routes: frontend
 # ---------------------------------------------------------------------------
@@ -189,6 +213,170 @@ async def set_config(req: ConfigUpdate):
 
 
 # ---------------------------------------------------------------------------
+# Routes: provider settings (the page that was missing)
+# ---------------------------------------------------------------------------
+# Non-secret choices go to avb.toml; secrets go to .env. Both are written
+# line-by-line so existing comments survive, and os.environ is updated in
+# process so a save takes effect without restarting the server.
+_LLM_PRESETS = {
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-flash",
+                 "api_key_env": "DEEPSEEK_API_KEY"},
+    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini",
+               "api_key_env": "OPENAI_API_KEY"},
+}
+
+
+def _spec_payload(specs, selected: str | None = None):
+    out = []
+    for s in specs:
+        out.append({
+            "key": s.key,
+            "label": s.label,
+            "kind": s.kind,
+            "ready": s.ready(),
+            "missing": s.missing(),
+            "console": s.console,
+            "notes": s.notes,
+            "models": list(s.models),
+            "model_env": s.model_env,
+            "model_value": os.environ.get(s.model_env, "") if s.model_env else "",
+            "envs": env_status(s),
+            "selected": selected == s.key,
+        })
+    return out
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Everything the settings page needs: what's available, what's missing."""
+    cfg = load_config()
+    from avb.assets.voice import build_voice_provider
+    from avb.assets.video import build_video_provider
+
+    try:
+        video = build_video_provider(cfg.video.provider)
+        video_active, video_ready = video.name, True
+    except Exception as e:  # ProviderUnavailable
+        video_active, video_ready = None, False
+        video_error = str(e)
+    else:
+        video_error = ""
+
+    voice = build_voice_provider(cfg.voice.provider)
+
+    # `auto` means "whatever is configured"; resolve it for display so the
+    # dropdown does not show a mode the user cannot reason about.
+    def _resolve(kind, want):
+        if want and want != "auto":
+            return want
+        for s in (VIDEO_SPECS if kind == "video" else VOICE_SPECS):
+            if s.ready():
+                return s.key
+        return "auto"
+
+    return {
+        "video": {
+            "selected": cfg.video.provider,
+            "resolved": _resolve("video", cfg.video.provider),
+            "active": video_active,
+            "ready": video_ready,
+            "error": video_error,
+            "specs": _spec_payload(VIDEO_SPECS, _resolve("video", cfg.video.provider)),
+        },
+        "voice": {
+            "selected": cfg.voice.provider,
+            "resolved": voice.name.replace("-tts", "") if voice else "auto",
+            "active": voice.name,
+            "ready": voice.available(),
+            "specs": _spec_payload(VOICE_SPECS, cfg.voice.provider),
+        },
+        "llm": {
+            "selected": cfg.llm.provider,
+            "model": cfg.llm.model,
+            "base_url": cfg.llm.base_url,
+            "api_key_env": cfg.llm.api_key_env,
+            "api_key_set": bool(cfg.llm.api_key),
+            "api_key_masked": mask(cfg.llm.api_key),
+            "specs": _spec_payload(LLM_SPECS, cfg.llm.provider),
+        },
+        "publish": {"specs": _spec_payload(PUBLISH_SPECS, "tiktok")},
+        "env_file": str(env_path()),
+        "toml_file": str(find_config_path() or Path("avb.toml")),
+    }
+
+
+@app.post("/api/settings")
+async def update_settings(req: SettingsUpdate):
+    """Persist provider choice + credentials, then re-probe.
+
+    Returns the same shape as GET so the UI can just re-render.
+    """
+    cfg_path = find_config_path() or Path("avb.toml")
+    if not cfg_path.is_file():
+        save_config(load_config(), cfg_path)
+    written_toml: list[str] = []
+    written_env: list[str] = []
+
+    def _toml(dotted: str, value: str):
+        try:
+            changed, _ = config_set(cfg_path, dotted, value)
+            if changed:
+                written_toml.append(dotted)
+        except Exception:
+            pass
+
+    if req.video_provider:
+        _toml("video.provider", req.video_provider)
+    if req.voice_provider:
+        _toml("voice.provider", req.voice_provider)
+    if req.llm_provider:
+        _toml("llm.provider", req.llm_provider)
+        preset = _LLM_PRESETS.get(req.llm_provider.strip().lower())
+        if preset and not req.llm_base_url:
+            _toml("llm.base_url", preset["base_url"])
+        if preset and not req.llm_model:
+            _toml("llm.model", preset["model"])
+        if preset:
+            _toml("llm.api_key_env", preset["api_key_env"])
+    if req.llm_model:
+        _toml("llm.model", req.llm_model)
+    if req.llm_base_url:
+        _toml("llm.base_url", req.llm_base_url)
+
+    # Secrets -> .env, and into os.environ so they apply immediately.
+    secrets: dict[str, str] = {}
+    for k, v in (req.keys or {}).items():
+        v = (v or "").strip()
+        if not v or not re.fullmatch(r"[A-Z][A-Z0-9_]*", k or ""):
+            continue  # blank = leave as-is; non-env-shaped = ignore
+        secrets[k] = v
+
+    if req.video_model:
+        # per-provider model override, e.g. SEEDANCE_MODEL
+        sel = (req.video_provider or load_config().video.provider or "").lower()
+        spec = spec_for("video", sel)
+        if spec and spec.model_env:
+            secrets[spec.model_env] = req.video_model.strip()
+
+    if secrets:
+        write_env(secrets)
+        os.environ.update(secrets)
+        written_env = sorted(secrets)
+
+    # Provider objects cache their key at construction time, so drop any
+    # memoised client that would otherwise keep the old credential.
+    try:
+        from avb import llm as _llm
+        _llm.get_client(load_config())
+    except Exception:
+        pass
+
+    fresh = await get_settings()
+    fresh["written"] = {"toml": written_toml, "env": written_env}
+    return fresh
+
+
+# ---------------------------------------------------------------------------
 # Routes: providers
 # ---------------------------------------------------------------------------
 @app.get("/api/providers")
@@ -197,9 +385,7 @@ async def list_providers():
     from avb.assets.video import build_video_provider, _REGISTRY as VREG
 
     voice = build_voice_provider()
-    video = build_video_provider()
 
-    # Probe video providers
     v_status = {}
     for name, cls in VREG.items():
         try:
@@ -208,9 +394,15 @@ async def list_providers():
         except Exception:
             v_status[name] = {"available": False, "class": cls.__name__}
 
+    try:
+        video = build_video_provider()
+        active, err = video.name, None
+    except Exception as e:
+        active, err = None, str(e)
+
     return {
         "voice": {"active": voice.name, "available": voice.available()},
-        "video": {"active": video.name, "providers": v_status},
+        "video": {"active": active, "error": err, "providers": v_status},
     }
 
 
@@ -219,6 +411,18 @@ async def list_providers():
 # ---------------------------------------------------------------------------
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
+    # Fail fast with an actionable message rather than burning a job on a
+    # pipeline that cannot produce footage: there is no offline video path.
+    from avb.assets.video import build_video_provider
+    cfg0 = load_config()
+    try:
+        build_video_provider(req.video_provider or cfg0.video.provider)
+    except Exception as e:
+        raise HTTPException(
+            400,
+            "尚未配置可用的视频 Provider。请在左侧「Provider 配置」里选择一家并填入 API Key。",
+        ) from e
+
     job_id = uuid.uuid4().hex[:12]
     _jobs[job_id] = {
         "job_id": job_id,
