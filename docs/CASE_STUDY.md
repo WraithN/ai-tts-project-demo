@@ -248,9 +248,10 @@ absolute-path manifest。
 > - *Voice*: edge-tts for volume (free, neural, word-level boundaries) /
 >   ElevenLabs when an SLA matters / IndexTTS2.5 or CosyVoice2 for
 >   duration-controlled or cloned voices where lip sync is needed.
-> - *Footage*: Veo / Kling / MiniMax Hailuo / Tongyi Wan / CogVideoX behind one
->   adapter interface. Wan is the only major open-weights option (Apache 2.0),
->   so it is the escape hatch if API pricing or access moves.
+> - *Footage*: Veo / Kling / Jimeng (Seedance) / MiniMax Hailuo / Tongyi Wan /
+>   CogVideoX behind one adapter interface. Wan is the only major
+>   open-weights option (Apache 2.0), so it is the escape hatch if API
+>   pricing or access moves.
 > - *Stills / illustration*: FLUX-class image models for the comic / vector /
 >   claymation routes — these are cheaper and far more controllable than
 >   generated video, and they are the most reliable styles in the matrix.

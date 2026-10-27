@@ -135,17 +135,42 @@ pipeline works beats three hours of local inference.
 | `mock` | `MockVideo` | ✅ used, offline, procedural |
 | `kling` | `KlingVideo` | ✅ adapter implemented, needs `KLING_API_KEY` |
 | `veo` | `VeoVideo` | ✅ adapter implemented, needs `GOOGLE_API_KEY` |
+| `jimeng`/`dreamina` | `JimengVideo` | ✅ adapter implemented, needs `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` |
 | `bailian`/`wan` | `BailianVideo` | ✅ adapter implemented, needs `BAILIAN_API_KEY` |
 | `minimax`/`hailuo` | `MiniMaxVideo` | ✅ adapter implemented, needs `MINIMAX_API_KEY` |
 | `zhipu`/`cogvideox` | `ZhipuVideo` | ✅ adapter implemented, needs `ZHIPU_API_KEY` |
 
-All five real adapters share `_AsyncVideoBase` (submit → poll → download)
+All six real adapters share `_AsyncVideoBase` (submit → poll → download)
 and are content-addressed through the same cache. Swapping is:
 
 ```bash
 python -m avb.cli config set video.provider kling
 export KLING_API_KEY=...
 ```
+
+### Jimeng (即梦) — the odd one out
+
+Three things about the Volcengine path that differ from every other adapter
+here, and all three bite people:
+
+1. **Auth is AK/SK HMAC-SHA256, not a bearer token.** The signature is
+   AWS-SigV4-shaped: derive a key through `date → cn-north-1 → cv →
+   "request"`, then sign a canonical request. `avb/assets/video.py`
+   implements it in ~40 lines so the pipeline does not need the official
+   SDK. You need **both** `VOLC_ACCESS_KEY` and `VOLC_SECRET_KEY`; a single
+   key is not enough and `available()` correctly reports false.
+2. **Result URLs expire in about an hour.** The base class downloads the
+   clip the instant polling returns `done`, which is the right shape. Never
+   cache the URL instead of the bytes.
+3. **Concurrency is capped at 1** on the Jimeng side. Fan out through the
+   orchestrator's serial queue, not through threads — parallel submits get
+   rejected or queued anyway.
+
+`req_key` selects the model generation (`jimeng_vgfm_t2v_l20` = S2.0 Pro
+text-to-video as of 2026-10). ByteDance versions these aggressively, so it
+is overridable via `JIMENG_REQ_KEY` rather than hardcoded into the payload
+logic. Statuses seen: `in_queue` → `generating` → `done` (or
+`not_found`/`expired` on the failure path).
 
 **Not yet live-tested against a billed endpoint** — no paid video key was
 available in this environment. The request shapes follow each vendor's
@@ -193,3 +218,4 @@ exists.
 | Date | Change |
 |---|---|
 | 2026-10 | initial survey; edge-tts adopted as default voice; domestic video adapters written (Kling / Bailian / MiniMax / Zhipu) alongside Veo |
+| 2026-10 | Jimeng (即梦) adapter added — Volcengine AK/SK HMAC-SHA256 signing implemented inline, `req_key` overridable |

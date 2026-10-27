@@ -262,3 +262,64 @@ def test_cli_providers_lists_all(capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "VOICE" in out and "VIDEO" in out and "LLM" in out
+
+
+# --------------------------------------------------------------------------
+# Jimeng / Volcengine signature
+# --------------------------------------------------------------------------
+
+
+def test_volc_signature_is_deterministic():
+    """Same inputs -> same signature; different body -> different signature."""
+    from datetime import datetime
+
+    from avb.assets.video import _volc_authorization
+
+    now = datetime(2026, 10, 27, 6, 0, 0)
+    q = {"Action": "CVSync2AsyncSubmitTask", "Version": "2022-08-31"}
+    a = _volc_authorization("POST", q, b'{"req_key":"x"}', "AKID", "SECRET", now=now)
+    b = _volc_authorization("POST", q, b'{"req_key":"x"}', "AKID", "SECRET", now=now)
+    assert a["authorization"] == b["authorization"]
+
+    c = _volc_authorization("POST", q, b'{"req_key":"y"}', "AKID", "SECRET", now=now)
+    assert a["authorization"] != c["authorization"]
+
+
+def test_volc_signature_shape():
+    """Header must carry credential scope and a hex signature."""
+    import re
+    from datetime import datetime
+
+    from avb.assets.video import _volc_authorization
+
+    h = _volc_authorization(
+        "POST",
+        {"Action": "CVSync2AsyncSubmitTask", "Version": "2022-08-31"},
+        b"{}",
+        "AKID",
+        "SECRET",
+        now=datetime(2026, 10, 27, 6, 0, 0),
+    )
+    auth = h["authorization"]
+    assert auth.startswith("HMAC-SHA256 Credential=AKID/20261027/cn-north-1/cv/request")
+    assert "SignedHeaders=" in auth
+    sig = auth.split("Signature=")[-1]
+    assert re.fullmatch(r"[0-9a-f]{64}", sig), sig
+    assert h["x-content-sha256"] and h["x-date"]
+
+
+def test_jimeng_registered_and_needs_two_keys():
+    from avb.assets.video import _REGISTRY, JimengVideo
+
+    assert _REGISTRY.get("jimeng") is JimengVideo
+    assert _REGISTRY.get("dreamina") is JimengVideo
+
+    j = JimengVideo()
+    j.api_key = ""
+    j.secret_key = ""
+    assert j.available() is False
+    j.api_key = "ak"
+    assert j.available() is False, "a lone access key must not look available"
+    j.secret_key = "sk"
+    assert j.available() is True
+    assert j.req_key.startswith("jimeng_")

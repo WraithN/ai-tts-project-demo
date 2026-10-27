@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from .image import background
 
 __all__ = [
     "MockVideo", "VeoVideo", "KlingVideo",
-    "BailianVideo", "MiniMaxVideo", "ZhipuVideo",
+    "BailianVideo", "MiniMaxVideo", "ZhipuVideo", "JimengVideo",
     "VideoResult", "build_video_provider",
 ]
 
@@ -324,6 +325,175 @@ class ZhipuVideo(_AsyncVideoBase):
 
 
 # --------------------------------------------------------------------------
+# Jimeng (ByteDance / Volcengine)
+# --------------------------------------------------------------------------
+#
+# Two things make this adapter different from the Bearer-token family above:
+#
+# 1. Auth is the Volcengine HMAC-SHA256 request signature (AK/SK), not a
+#    bearer token. It is AWS-SigV4-shaped: derive a signing key through
+#    date/region/service, then sign a canonical request. Implemented below
+#    because "use the official SDK" is not an option for a dependency-light
+#    pipeline, and the algorithm is ~30 lines of hmac/hashlib.
+# 2. The result URL expires in about an hour. The base class downloads
+#    immediately after polling, which is the correct shape -- but if you ever
+#    change generate() to return URLs instead of local files, you will lose
+#    clips silently. Jimeng also caps concurrency at 1, so fan it out through
+#    the orchestrator's queue rather than threads.
+
+_REGION = "cn-north-1"
+_SERVICE = "cv"
+
+
+def _volc_sign(secret_key: str, date_short: str) -> bytes:
+    """Derive the Volcengine signing key: date -> region -> service -> 'request'."""
+    import hashlib
+    import hmac
+
+    def _h(key: bytes | str, msg: str) -> bytes:
+        return hmac.new(key if isinstance(key, bytes) else key.encode(), msg.encode(), hashlib.sha256).digest()
+
+    k_date = _h(secret_key, date_short)
+    k_region = _h(k_date, _REGION)
+    k_service = _h(k_region, _SERVICE)
+    return _h(k_service, "request")
+
+
+def _volc_authorization(
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    ak: str,
+    sk: str,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Build the `Authorization` header and supporting headers for visual.volcengineapi.com."""
+    import hashlib
+    import hmac
+
+    now = now or datetime.utcnow()
+    x_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_short = now.strftime("%Y%m%d")
+
+    payload_hash = hashlib.sha256(body).hexdigest()
+    # Query string must be sorted by key, URI-encoded, exactly as sent.
+    canonical_qs = "&".join(f"{_uri_encode(k)}={_uri_encode(v)}" for k, v in sorted(query.items()))
+    headers = {
+        "content-type": "application/json",
+        "host": "visual.volcengineapi.com",
+        "x-content-sha256": payload_hash,
+        "x-date": x_date,
+    }
+    signed_headers = ";".join(sorted(headers))
+    canonical_headers = "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+    canonical_request = "\n".join(
+        [method, "/", canonical_qs, canonical_headers, signed_headers, payload_hash]
+    )
+    scope = f"{date_short}/{_REGION}/{_SERVICE}/request"
+    string_to_sign = "\n".join(
+        ["HMAC-SHA256", x_date, scope, hashlib.sha256(canonical_request.encode()).hexdigest()]
+    )
+    signing_key = _volc_sign(sk, date_short)
+    signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+    headers["authorization"] = (
+        f"HMAC-SHA256 Credential={ak}/{scope}, SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    return headers
+
+
+def _uri_encode(s: str) -> str:
+    from urllib.parse import quote
+
+    return quote(str(s), safe="-_.~")
+
+
+class JimengVideo(_AsyncVideoBase):
+    """ByteDance Jimeng (即梦) via the Volcengine visual API.
+
+    Text-to-video and image-to-video from the same model family that powers
+    the consumer Jimeng product. Two practical notes that bite people:
+
+    - Auth is the Volcengine AK/SK signature, so this needs
+      `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` (not a single token).
+    - Result URLs expire in ~1 hour and concurrency is capped at 1. The
+      pipeline downloads the clip the moment polling succeeds, so expiry is
+      not a problem in normal operation -- but do not cache URLs.
+
+    `req_key` selects the model generation; `jimeng_vgfm_t2v_l20` is the
+    S2.0 Pro text-to-video endpoint. Override via `JIMENG_REQ_KEY` when
+    ByteDance moves the identifier (they version these aggressively).
+    """
+
+    name = "jimeng"
+    price_per_sec = 0.05
+    submit_url = "https://visual.volcengineapi.com"
+    env_key = "VOLC_ACCESS_KEY"
+    env_key_secret = "VOLC_SECRET_KEY"
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get(self.env_key, "")
+        self.secret_key = os.environ.get(self.env_key_secret, "")
+        self.req_key = os.environ.get("JIMENG_REQ_KEY", "jimeng_vgfm_t2v_l20")
+
+    def available(self) -> bool:
+        return bool(self.api_key and self.secret_key)
+
+    def _call(self, action: str, payload: dict) -> dict:
+        import json as _json
+
+        body = _json.dumps(payload, separators=(",", ":")).encode()
+        query = {"Action": action, "Version": "2022-08-31"}
+        headers = _volc_authorization("POST", query, body, self.api_key, self.secret_key)
+        # Sign over the canonical query; send it on the URL too.
+        qs = "&".join(f"{k}={v}" for k, v in sorted(query.items()))
+        r = requests.post(f"{self.submit_url}?{qs}", data=body, headers=headers, timeout=120)
+        r.raise_for_status()
+        return r.json()
+
+    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+        payload = {
+            "req_key": self.req_key,
+            "prompt": prompt[:150],  # S2.0 Pro documents a 150-char cap
+            "seed": int(seed) if seed and seed > 0 else -1,
+            "aspect_ratio": "9:16",
+        }
+        d = self._call("CVSync2AsyncSubmitTask", payload)
+        code = d.get("code", d.get("status"))
+        if code not in (10000, 0, "10000"):
+            raise RuntimeError(f"Jimeng submit failed: {d.get('message', d)}")
+        task_id = (d.get("data") or {}).get("task_id")
+        if not task_id:
+            raise RuntimeError(f"Jimeng returned no task_id: {d}")
+        return task_id
+
+    def _poll(self, job_id: str, timeout: float = 900.0) -> str:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            d = self._call("CVSync2AsyncGetResult", {"req_key": self.req_key, "task_id": job_id})
+            data = d.get("data") or {}
+            status = str(data.get("status", "")).lower()
+            if status in ("done", "success", "succeeded", "10000"):
+                url = data.get("video_url") or data.get("resp_data")
+                if isinstance(url, dict):
+                    url = url.get("video_url")
+                if not url:
+                    # Some generations return JSON-in-string under resp_data.
+                    if isinstance(data.get("resp_data"), str) and "video_url" in data["resp_data"]:
+                        import json as _json
+
+                        url = _json.loads(data["resp_data"]).get("video_url")
+                if not url:
+                    raise RuntimeError(f"Jimeng done but no video_url: {data}")
+                return url
+            if status in ("not_found", "expired", "failed", "error", "cancelled"):
+                raise RuntimeError(f"Jimeng job {job_id} ended as {status}: {data}")
+            time.sleep(8)
+        raise TimeoutError(f"Jimeng job {job_id} timed out")
+
+
+
+# --------------------------------------------------------------------------
 # Provider selection
 # --------------------------------------------------------------------------
 
@@ -337,6 +507,8 @@ _REGISTRY: dict[str, type] = {
     "hailuo": MiniMaxVideo,
     "zhipu": ZhipuVideo,
     "cogvideox": ZhipuVideo,
+    "jimeng": JimengVideo,
+    "dreamina": JimengVideo,
 }
 
 
@@ -348,7 +520,7 @@ def build_video_provider(prefer: str | None = None) -> Provider:
     vendor kills an API (see: Sora 2, Sept 2026) the pipeline keeps running.
     """
     order = [prefer or os.environ.get("AVB_VIDEO_PROVIDER") or "mock"]
-    order += [k for k in ("veo", "kling", "bailian", "minimax", "zhipu", "mock") if k not in order]
+    order += [k for k in ("veo", "kling", "jimeng", "bailian", "minimax", "zhipu", "mock") if k not in order]
     for key in order:
         cls = _REGISTRY.get(key)
         if not cls:

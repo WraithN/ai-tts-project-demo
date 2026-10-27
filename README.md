@@ -20,7 +20,7 @@ Straight answer, because the distinction matters:
 | **LLM** (script parse, edit routing) | **real** — DeepSeek V4 by default, any OpenAI-compatible endpoint |
 | **TTS** | **real** — edge-tts neural voices, free, word-level timestamps |
 | **Music / SFX** | synthesised (chord progression + DSP), not generative |
-| **Visuals / footage** | procedural stills + compositor motion; real video providers (Kling, Veo, Wan, Hailuo, CogVideoX) implemented and selected by config |
+| **Visuals / footage** | procedural stills + compositor motion; real video providers (Kling, Veo, Jimeng, Wan, Hailuo, CogVideoX) implemented and selected by config |
 
 The offline formant voice and procedural video exist so the pipeline runs
 with zero credentials and zero network. Everything real plugs into the same
@@ -299,7 +299,7 @@ cache.
 - **Video mocks are procedural stills.** Motion is applied at composite time
   (Ken Burns, punch-zoom) — deliberately, so changing `zoom_in` to `punch`
   costs zero generation. Real footage needs a keyed provider; the adapters
-  for Kling / Veo / Wan / Hailuo / CogVideoX are implemented but not yet
+  for Kling / Veo / Jimeng / Wan / Hailuo / CogVideoX are implemented but not yet
   live-tested against a billed endpoint.
 - **Compliance is your job.** FTC endorsement guides and Meta ad policy
   apply to what you ship. This pipeline does not audit claims.
