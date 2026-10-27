@@ -1,0 +1,81 @@
+# ai-video-builder configuration
+# Docs: docs/USAGE.md
+#
+# Secrets are NOT stored here. This file only names the env var that holds
+# each key (see `[llm].api_key_env`). Export the key in your shell or put it
+# in a .env file next to this one.
+#
+# Edit by hand, with `avb config set llm.model deepseek-v4-pro`, or via the
+# local web UI: `avb config web`.
+
+[llm]
+# Any OpenAI-compatible /chat/completions endpoint.
+#   deepseek  -> https://api.deepseek.com/v1   (DeepSeek V4 family)
+#   openai    -> https://api.openai.com/v1
+#   moonshot  -> https://api.moonshot.cn/v1
+#   zhipu     -> https://open.bigmodel.cn/api/paas/v4
+#   ollama    -> http://localhost:11434/v1  (with --jinja)
+provider = "deepseek"
+model = "deepseek-flash"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+# Reasoning models burn budget thinking before they answer. Too-low
+# max_tokens looks like "the model returned nothing" rather than an error.
+max_tokens = 8000
+temperature = 0.15
+timeout = 120
+# DeepSeek V4 effort knob: low | high | max. Lower is cheaper and faster.
+effort = "low"
+enabled = true
+
+[voice]
+# auto | edge | formant | elevenlabs
+#   auto       -> elevenlabs if keyed, else edge if installed, else formant
+#   edge       -> free Microsoft neural TTS (edge-tts), word boundaries
+#   formant    -> offline DSP synthesiser, always works, robotic
+#   elevenlabs -> paid, best quality, exact character timings
+provider = "auto"
+# For edge-tts: en-US-AriaNeural, en-US-GuyNeural, zh-CN-XiaoxiaoNeural, ...
+# For the offline formant synth: expert_female, expert_male, warm_female, ...
+voice = "en-US-AriaNeural"
+rate = "+8%"
+pitch = "+0Hz"
+volume = "+0%"
+speed = 1.0
+energy = 1.0
+
+[video]
+# auto | mock | kling | veo | bailian | minimax | vidu | jimeng | zhipu
+#   mock     -> procedural stills + composer-side motion, offline, free
+#   kling    -> Kling 3.0/4.0 API (kling.ai)
+#   veo      -> Google Veo 3.1
+#   bailian -> Alibaba Bailian / Tongyi Wanxiang (Wan)
+#   minimax  -> MiniMax Hailuo
+#   vidu     -> Vidu Q3
+#   jimeng   -> ByteDance Jimeng / Seedance
+#   zhipu    -> Zhipu CogVideoX (open weights, or the hosted API)
+provider = "auto"
+model = ""
+clip_seconds = 5.0
+# Hard spend ceiling per run, USD. 0 disables the guard.
+max_usd_per_run = 0.0
+poll_timeout_s = 600
+
+[render]
+width = 1080
+height = 1920
+fps = 30
+crf = 18
+draft_crf = 24
+preset = "veryfast"
+# 0 = auto (CPU count). Set to 1 to serialise; usefully for debugging.
+workers = 0
+tail_pad = 0.22
+
+# top-level
+project_name = "untitled"
+style = "dr_vsl"
+aspect = "9:16"
+workdir = ".avb"
+qc_max_caption_offset_ms = 80
+qc_min_silence_s = 0.35

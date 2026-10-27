@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-video-builder"
+version = "0.2.0"
+description = "Script -> SceneGraph IR -> finished video ad, with conversational editing"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ai-video-builder" }]
+keywords = ["video", "tts", "generative", "advertising", "pipeline"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Core is deliberately small: everything else is optional and probed at
+# runtime. A pipeline that cannot start because an optional TTS package is
+# missing is a bad pipeline.
+dependencies = [
+  "numpy>=2.0",
+  "pillow>=11.0",
+  "scipy>=1.14",
+  "requests>=2.32",
+]
+
+[project.optional-dependencies]
+# Free neural TTS with word-level timestamps. Strongly recommended.
+edge = ["edge-tts>=7.0"]
+# Comfort dependencies for the CLI. Purely optional.
+cli = ["rich>=13.0"]
+# Everything the default install is happy to use.
+all = ["edge-tts>=7.0", "rich>=13.0"]
+
+[project.scripts]
+avb = "avb.cli:main"
+
+[project.urls]
+Documentation = "docs/USAGE.md"
+
+[tool.setuptools]
+# Flat layout: the package is `avb/` at the repo root.
+packages = ["avb", "avb.assets", "avb.render"]
+
+[tool.setuptools.package-data]
+avb = ["py.typed"]
+
+# --------------------------------------------------------------------------
+# tests
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

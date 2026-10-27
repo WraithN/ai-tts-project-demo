@@ -1,0 +1,33 @@
+# secrets
+.env
+*.key
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# pipeline working dirs and caches
+.avb/
+.avb_*/
+*.mp4
+!demo/out/.gitkeep
+demo/out/
+*.log
+
+# test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db

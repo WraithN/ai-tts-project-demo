@@ -1,0 +1,477 @@
+"""The orchestrator.
+
+    script -> IR -> assets (cached by content hash) -> segments (cached) -> mp4
+
+`run(..., only={...})` re-renders just the named scenes and re-concats. That
+is the payoff of the whole architecture, and it is what makes conversational
+editing viable instead of theoretical.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import os
+import shutil
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+
+from .hashing import short_hash
+from .assets.base import Cache, CostLedger
+from .assets.music import SynthMusic, render_track, sfx
+from .assets.video import build_video_provider
+from .assets.voice import ElevenLabsVoice, FormantVoice, build_voice_provider
+from .ir import Project, Scene
+from .config import Config
+from .qc import run_qc
+from .render import ffmpeg
+from .render.composer import SceneAssets, render_scene_frames
+
+TAIL_PAD = 0.22
+
+# Bump whenever avb/render/*.py changes what a frame looks like. Baked into
+# the segment cache key so a compositor fix actually reaches the output.
+RENDER_VERSION = "3-caption-wrap"
+
+
+@dataclass
+class SceneTiming:
+    scene_id: str
+    index: int
+    beat: str
+    start: float
+    duration: float
+    vo_start: float
+    text: str
+
+
+@dataclass
+class RunReport:
+    video: Path
+    project_id: str
+    style: str
+    aspect: str
+    total_duration: float
+    scenes: list[SceneTiming]
+    rendered: list[str] = field(default_factory=list)
+    reused: list[str] = field(default_factory=list)
+    cost_usd: float = 0.0
+    cost_by_kind: dict[str, float] = field(default_factory=dict)
+    cache_stats: dict[str, float] = field(default_factory=dict)
+    qc: dict = field(default_factory=dict)
+    wall_seconds: float = 0.0
+
+
+class Pipeline:
+    def __init__(
+        self,
+        workdir: str | Path = ".avb",
+        *,
+        draft: bool = False,
+        crf: int | None = None,
+        preset: str | None = None,
+        workers: int = 0,
+        config: "Config | None" = None,
+    ) -> None:
+        from .config import Config
+
+        self.config = config or Config()
+        self.workdir = Path(workdir)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.cache = Cache(self.workdir / "cache")
+        self.ledger = CostLedger()
+        self.draft = draft
+        self.workers = int(workers) or int(self.config.render.workers)
+
+        # Provider selection: explicit config wins; otherwise the best
+        # available thing, because falling back matters more than picking
+        # "the best" -- vendors shut APIs down (Sora, Sept 2026).
+        self.voice = build_voice_provider(self.config.voice.provider)
+        self.video = build_video_provider(self.config.video.provider)
+        self.music = SynthMusic()
+
+        default_crf = self.config.render.draft_crf if draft else self.config.render.crf
+        self.crf = crf if crf is not None else default_crf
+        self.preset = preset or self.config.render.preset
+
+    def describe(self) -> str:
+        return (
+            f"voice={self.voice.describe()} | video={self.video.describe()} | "
+            f"music={self.music.describe()} | draft={self.draft}"
+        )
+
+    # -- paths -------------------------------------------------------------
+    def _proj_dir(self, project: Project) -> Path:
+        d = self.workdir / "projects" / project.id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _scene_dir(self, project: Project, scene: Scene) -> Path:
+        d = self._proj_dir(project) / scene.id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    # -- assets ------------------------------------------------------------
+    def synth(self, project: Project, only: set[str] | None = None) -> dict[str, SceneAssets]:
+        out: dict[str, SceneAssets] = {}
+        for scene in project.scenes:
+            if only is not None and scene.id not in only:
+                continue
+            sd = self._scene_dir(project, scene)
+
+            vo_path = sd / "vo.wav"
+            words: list[dict] = []
+            dur = 0.0
+            if scene.vo.text.strip():
+                res = self.voice.synth(
+                    scene.vo.text,
+                    voice=scene.vo.voice,
+                    speed=scene.vo.speed,
+                    energy=scene.vo.energy,
+                    cache=self.cache,
+                )
+                shutil.copyfile(res.path, vo_path)
+                words, dur = res.words, res.duration
+                self.ledger.add(res.cost.provider, "voice", res.cost.usd, res.cost.units, res.cost.unit)
+
+            bg_path = sd / "bg.png"
+            vres = self.video.generate(
+                prompt=scene.visual.prompt,
+                style=scene.visual.style or project.style,
+                seed=scene.visual.seed,
+                seconds=dur + TAIL_PAD,
+                w=project.width,
+                h=project.height,
+                cache=self.cache,
+            )
+            shutil.copyfile(vres.path, bg_path)
+            self.ledger.add(vres.cost.provider, "video", vres.cost.usd, vres.cost.units, vres.cost.unit)
+
+            out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
+        return out
+
+    def load_assets(self, project: Project) -> dict[str, SceneAssets]:
+        """Read back previously synthesized assets from the project dir."""
+        out: dict[str, SceneAssets] = {}
+        for scene in project.scenes:
+            sd = self._proj_dir(project) / scene.id
+            vo, bg = sd / "vo.wav", sd / "bg.png"
+            if not (vo.is_file() and bg.is_file()):
+                continue
+            words: list[dict] = []
+            dur = 0.0
+            meta = sd / "meta.json"
+            if meta.is_file():
+                m = json.loads(meta.read_text(encoding="utf-8"))
+                words, dur = m.get("words", []), float(m.get("duration", 0.0))
+            out[scene.id] = SceneAssets(bg=bg, vo=vo, vo_words=words, vo_duration=dur)
+        return out
+
+    def _save_meta(self, project: Project, scene: Scene, assets: SceneAssets) -> None:
+        sd = self._scene_dir(project, scene)
+        (sd / "meta.json").write_text(
+            json.dumps({"words": assets.vo_words, "duration": assets.vo_duration}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    # -- rendering ---------------------------------------------------------
+    def segment(
+        self,
+        project: Project,
+        scene: Scene,
+        assets: SceneAssets,
+        *,
+        global_start: float = 0.0,
+        total: float = 1.0,
+    ) -> tuple[Path, bool]:
+        """Render one scene to mp4. Returns (path, was_rendered)."""
+        return _render_segment(
+            project, scene, assets,
+            global_start=global_start, total=total,
+            draft=self.draft, crf=self.crf, preset=self.preset,
+            workdir=self.workdir,
+        )
+
+    @staticmethod
+    def scene_duration(scene: Scene, assets: SceneAssets) -> float:
+        d = scene.duration if scene.duration is not None else (assets.vo_duration + TAIL_PAD)
+        return max(0.5, round(d, 4))
+
+    def plan_timeline(self, project: Project, assets: dict[str, SceneAssets]) -> tuple[list[SceneTiming], float]:
+        """Compute each scene's start/end on the global timeline.
+
+        Runs before any rendering so the progress bar and music bed can be
+        laid out against the real total duration.
+        """
+        timings: list[SceneTiming] = []
+        t = 0.0
+        for scene in project.scenes:
+            a = assets.get(scene.id)
+            if a is None:
+                continue
+            dur = self.scene_duration(scene, a)
+            timings.append(
+                SceneTiming(
+                    scene_id=scene.id,
+                    index=scene.index,
+                    beat=scene.beat,
+                    start=round(t, 4),
+                    duration=dur,
+                    vo_start=round(t, 4),
+                    text=scene.vo.text,
+                )
+            )
+            t += dur
+        return timings, max(0.5, round(t, 4))
+
+    def assemble(
+        self, project: Project, assets: dict[str, SceneAssets], out: Path
+    ) -> tuple[Path, list[SceneTiming], float, list[str], list[str]]:
+        timings, total = self.plan_timeline(project, assets)
+
+        # Fan out per-scene rendering. Frame composition is pure-Python/PIL
+        # and therefore GIL-bound, so a thread pool barely moves the needle
+        # (measured 1.1x). Process pools actually cross that boundary --
+        # frames are generated and encoded entirely inside the worker.
+        by_id = {s.id: s for s in project.scenes}
+        order: list[str] = [tm.scene_id for tm in timings]
+        tmap = {t.scene_id: t for t in timings}
+
+        def _one(sid: str) -> tuple[str, Path, bool]:
+            return self.segment(
+                project, by_id[sid], assets[sid],
+                global_start=tmap[sid].start, total=total,
+            )
+
+        workers = self.workers if self.workers > 0 else min(8, max(2, (os.cpu_count() or 4)))
+        results: dict[str, tuple[Path, bool]] = {}
+        # Process pools need to re-import __main__ in the child. When the
+        # parent was launched from stdin or a notebook there is no real
+        # module to re-import and the pool dies with BrokenProcessPool, so
+        # fall back to threads (slower, GIL-bound) rather than failing.
+        can_fork = bool(getattr(sys.modules.get("__main__"), "__file__", None))
+        if workers > 1 and len(order) > 1 and can_fork:
+            try:
+                with ProcessPoolExecutor(max_workers=workers) as pool:
+                    futs = {
+                        pool.submit(
+                            _segment_job, project, by_id[sid], assets[sid],
+                            tmap[sid].start, total,
+                            self.draft, self.crf, self.preset, self.workdir,
+                        ): sid
+                        for sid in order
+                    }
+                    for fut in as_completed(futs):
+                        sid = futs[fut]
+                        results[sid] = fut.result()
+            except (BrokenProcessPool, PermissionError, OSError) as e:
+                # Windows spawn re-imports __main__; a caller without an
+                # `if __name__ == "__main__"` guard (or a restricted host)
+                # tears the pool down mid-run. Rendering is idempotent and
+                # content-addressed, so falling back to serial costs only
+                # wall-clock -- never correctness.
+                print(f"[avb] process pool unavailable ({type(e).__name__}), "
+                      f"rendering serially", file=sys.stderr)
+                results.clear()
+                for sid in order:
+                    results[sid] = _one(sid)
+        elif workers > 1 and len(order) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for sid, res in zip(order, pool.map(_one, order)):
+                    results[sid] = res
+        else:
+            for sid in order:
+                results[sid] = _one(sid)
+
+        segs = [results[sid][0] for sid in order]
+        rendered = [sid for sid in order if results[sid][1]]
+        reused = [sid for sid in order if not results[sid][1]]
+
+        joined = out.with_name(out.stem + "._joined.mp4")
+
+        if len(segs) == 1:
+            shutil.copyfile(segs[0], joined)
+        else:
+            ffmpeg.concat(segs, joined)
+
+        # ---- audio bed: VO + music (ducked) + SFX -------------------------
+        mix = self._mix_audio(project, assets, timings, total)
+        wav = out.with_name(out.stem + "._mix.wav")
+        ffmpeg.write_wav(wav, mix)
+        ffmpeg.mux_audio(joined, wav, out)
+
+        # keep intermediates; they are the cache
+        return out, timings, total, rendered, reused
+
+    def _mix_audio(self, project: Project, assets: dict[str, SceneAssets], timings: list[SceneTiming], total: float) -> np.ndarray:
+        sr = ffmpeg.SR
+        n = int(total * sr) + sr // 4
+        vo = np.zeros(n, dtype=np.float32)
+        fx = np.zeros(n, dtype=np.float32)
+
+        for tm in timings:
+            a = assets.get(tm.scene_id)
+            if not a or not a.vo.is_file():
+                continue
+            y = ffmpeg.decode_audio(a.vo, sr)
+            s = int(tm.vo_start * sr)
+            e = min(n, s + len(y))
+            vo[s:e] += y[: e - s]
+
+            for sfx_spec in next((s.sfx for s in project.scenes if s.id == tm.scene_id), []):
+                y2 = sfx(sfx_spec.name, sr)
+                s2 = int((tm.start + sfx_spec.at) * sr)
+                e2 = min(n, s2 + len(y2))
+                if s2 < n:
+                    fx[s2:e2] += y2[: e2 - s2]
+
+        bed = render_track(project.music.track, total + 1.0)[:n]
+
+        # Sidechain-style ducking: derive a gain envelope from VO energy so
+        # the music never fights the voice. This is the one audio decision
+        # that most separates "produced" from "assembled".
+        if project.music.duck_under_vo:
+            win = int(0.05 * sr)
+            env = np.sqrt(np.convolve(vo * vo, np.ones(win) / win, mode="same"))
+            env = env / (env.max() + 1e-6)
+            k = np.exp(-np.arange(0, win * 6) / (sr * 0.12))
+            env = np.convolve(env, k / k.sum(), mode="same")
+            gain = 1.0 - 0.72 * np.clip(env * 1.9, 0.0, 1.0)
+        else:
+            gain = np.ones(n, dtype=np.float32)
+
+        music = bed * project.music.volume * gain
+        out = vo * 0.95 + music + fx * 0.55
+        peak = float(np.max(np.abs(out))) or 1.0
+        if peak > 0.99:
+            out = out / peak * 0.98
+        return out.astype(np.float32)
+
+    # -- top level ---------------------------------------------------------
+    def run(self, project: Project, out: str | Path, only: set[str] | None = None) -> RunReport:
+        t0 = time.time()
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # Fresh ledger per run, otherwise costs from earlier renders leak
+        # into this one's report and the numbers stop meaning anything.
+        self.ledger = CostLedger()
+
+        fresh = self.synth(project, only=only)
+        assets = self.load_assets(project)
+        # In-memory results are authoritative: on a cold run there is no
+        # meta.json yet, and on a warm run we only re-synthesized `only`.
+        assets.update(fresh)
+        for sid, a in fresh.items():
+            self._save_meta(project, next(s for s in project.scenes if s.id == sid), a)
+
+        video, timings, total, rendered, reused = self.assemble(project, assets, out)
+
+        # Attribute render compute. Remotion bills $0.01/render; self-hosted
+        # lands in the same ballpark once you amortise the box.
+        self.ledger.add("renderer", "render", 0.010 * max(1, len(rendered)), len(rendered), "segment")
+
+        qc = run_qc(project, assets, timings, total)
+
+        return RunReport(
+            video=video,
+            project_id=project.id,
+            style=project.style,
+            aspect=project.aspect,
+            total_duration=round(total, 3),
+            scenes=timings,
+            rendered=rendered,
+            reused=reused,
+            cost_usd=self.ledger.total(),
+            cost_by_kind=self.ledger.by_kind(),
+            cache_stats=self.cache.stats(),
+            qc=qc,
+            wall_seconds=round(time.time() - t0, 2),
+        )
+
+
+
+def _segment_job(
+    project: Project,
+    scene: Scene,
+    assets: SceneAssets,
+    global_start: float,
+    total: float,
+    draft: bool,
+    crf: int,
+    preset: str,
+    workdir: str | Path,
+) -> tuple[Path, bool]:
+    """Process-pool entry point. Must stay module-level to be picklable."""
+    return _render_segment(
+        project, scene, assets,
+        global_start=global_start, total=total,
+        draft=draft, crf=crf, preset=preset,
+        workdir=workdir,
+    )
+
+
+def _render_segment(
+    project: Project,
+    scene: Scene,
+    assets: SceneAssets,
+    *,
+    global_start: float,
+    total: float,
+    draft: bool,
+    crf: int,
+    preset: str,
+    workdir: str | Path,
+) -> tuple[Path, bool]:
+    """Render one scene to mp4. Returns (path, was_rendered)."""
+    # RENDER_VERSION is in the key on purpose. The segment cache is keyed
+    # on scene semantics; changing the compositor without bumping it
+    # silently reuses stale frames, which is exactly how a caption fix
+    # ends up "not working".
+    key = short_hash({
+        **scene.semantic(),
+        "dur": scene.duration,
+        "w": project.width,
+        "h": project.height,
+        "fps": project.fps,
+        "render": RENDER_VERSION,
+    })
+    seg_dir = Path(workdir) / "projects" / project.id / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    out = seg_dir / f"{scene.id}.{key}.mp4"
+
+    if out.is_file() and out.stat().st_size > 0:
+        return out, False
+
+    w, h = project.width, project.height
+    frames = render_scene_frames(
+        scene,
+        assets,
+        project,
+        w,
+        h,
+        project.fps,
+        global_start=global_start,
+        total=total,
+        draft=draft,
+    )
+    tmp = out.with_suffix(".tmp.mp4")
+    ffmpeg.encode_segment(
+        frames,
+        int(w * (0.5 if draft else 1.0)),
+        int(h * (0.5 if draft else 1.0)),
+        project.fps,
+        assets.vo if assets.vo and assets.vo.is_file() else None,
+        tmp,
+        crf=crf,
+        preset=preset,
+    )
+    tmp.replace(out)
+    return out, True
+
