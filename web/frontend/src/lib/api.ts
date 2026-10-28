@@ -59,11 +59,40 @@ export interface Job {
   done: boolean
   error: string | null
   video_url: string | null
+  /** Absolute local path, needed by the TikTok upload step. */
+  video_path?: string | null
   cost: number | null
   total_duration?: number
   scenes?: number
   rendered?: number
   reused?: number
+}
+
+export interface PlanScene {
+  id: string
+  index: number
+  beat: string
+  /** Spoken line. Also drives the kinetic caption (one source of truth). */
+  vo: string
+  prompt: string
+  motion: string
+  style: string
+}
+
+export interface Plan {
+  plan_id: string
+  name: string
+  style: string
+  scenes: PlanScene[]
+}
+
+export interface EditPlanResult {
+  intent: string
+  scene_ids: string[]
+  ops: { path: string; value: unknown }[]
+  explanation: string
+  job_id?: string
+  rebuilt?: string[]
 }
 
 async function json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -100,6 +129,33 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** Step 1: script -> scenes. Free; nothing is generated yet. */
+  plan: (payload: { script: string; name: string; style: string; use_llm: boolean }) =>
+    json<Plan>('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  getPlan: (id: string) => json<Plan>(`/api/plan/${id}`),
+
+  /** Step 3: render the confirmed scenes. This is the step that spends money. */
+  render: (payload: {
+    plan_id: string
+    scenes: { id: string; vo: string; prompt: string }[]
+    name: string
+    style: string
+    aspect: string
+    draft: boolean
+    video_provider: string | null
+    voice_provider: string | null
+  }) =>
+    json<{ job_id: string }>('/api/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
   generate: (payload: {
     script: string
     name: string
@@ -118,15 +174,18 @@ export const api = {
 
   getJob: (id: string) => json<Job>(`/api/jobs/${id}`),
 
-  planEdit: (payload: { job_id: string; instruction: string; use_llm: boolean }) =>
-    json<{ intent: string; scene_ids: string[]; ops: { path: string; value: unknown }[]; explanation: string }>(
-      '/api/edit',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      },
-    ),
+  planEdit: (payload: {
+    job_id: string
+    instruction: string
+    use_llm: boolean
+    apply?: boolean
+    draft?: boolean
+  }) =>
+    json<EditPlanResult>('/api/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   tiktokAuthUrl: () => json<{ auth_url: string }>('/api/tiktok/auth-url'),
 

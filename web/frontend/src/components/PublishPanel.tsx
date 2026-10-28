@@ -15,12 +15,21 @@ import { api, errorText, toastError } from '@/lib/api'
 
 const PRIVACY = ['SELF_ONLY', 'PUBLIC_TO_EVERYONE', 'FOLLOWER_OF_CREATOR'] as const
 
-export function PublishPanel({ videoUrl }: { videoUrl: string | null }) {
+export function PublishPanel({
+  videoUrl,
+  videoPath,
+}: {
+  videoUrl: string | null
+  /** Server-side path; falls back to deriving it from videoUrl. */
+  videoPath?: string | null
+}) {
   const { t } = useTranslation()
   const [title, setTitle] = useState('')
   const [privacy, setPrivacy] = useState<string>('SELF_ONLY')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+
+  const target = videoPath || (videoUrl ? videoUrl.replace('/api/video/', 'demo/out/web/') : null)
 
   const auth = async () => {
     try {
@@ -33,7 +42,7 @@ export function PublishPanel({ videoUrl }: { videoUrl: string | null }) {
   }
 
   const upload = async () => {
-    if (!videoUrl) {
+    if (!target) {
       setMsg(t('publish.needVideo'))
       return
     }
@@ -41,7 +50,7 @@ export function PublishPanel({ videoUrl }: { videoUrl: string | null }) {
     setMsg('')
     try {
       const r = await api.uploadTiktok({
-        video_path: videoUrl.replace('/api/video/', 'demo/out/web/'),
+        video_path: target,
         title,
         privacy_level: privacy,
       })

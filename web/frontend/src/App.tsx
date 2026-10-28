@@ -1,26 +1,37 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toaster, toast } from 'sonner'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Settings as SettingsIcon, Sparkles } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { ProviderSettings } from '@/components/ProviderSettings'
 import { ScriptPanel, type GeneratePayload } from '@/components/ScriptPanel'
+import { SceneConfirm } from '@/components/SceneConfirm'
+import { Stepper, type StepId } from '@/components/Stepper'
 import { StatusCard } from '@/components/StatusCard'
 import { PreviewCard } from '@/components/PreviewCard'
 import { EditPanel } from '@/components/EditPanel'
 import { PublishPanel } from '@/components/PublishPanel'
 import { LogPanel } from '@/components/LogPanel'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/primitives'
 import { useJob } from '@/hooks/useJob'
-import { api, errorText, toastError, type Job, type Settings } from '@/lib/api'
+import { api, errorText, toastError, type Job, type Plan, type PlanScene, type Settings } from '@/lib/api'
+import { cn } from '@/lib/utils'
+
+type Page = 'settings' | 'create'
 
 export default function App() {
   const { t } = useTranslation()
+  const [page, setPage] = useState<Page>('create')
   const [settings, setSettings] = useState<Settings | null>(null)
   const [lines, setLines] = useState<string[]>([])
+
+  // --- creation flow ----------------------------------------------------
+  const [step, setStep] = useState<StepId>('script')
+  const [plan, setPlan] = useState<Plan | null>(null)
+  const [planBusy, setPlanBusy] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
-  const settingsRef = useRef<HTMLDivElement>(null)
+  /** Last payload used for step 1, so "re-parse" can redo it verbatim. */
+  const [scriptPayload, setScriptPayload] = useState<GeneratePayload | null>(null)
 
   const onLog = useCallback((line: string) => {
     setLines((v) => [...v.slice(-400), line])
@@ -35,25 +46,64 @@ export default function App() {
       .catch((e) => toastError(e))
   }, [])
 
-  const generate = async (p: GeneratePayload) => {
-    if (!settings?.video.ready) {
+  const ready = Boolean(settings?.video.ready)
+
+  // ---- step 1: script -> scene copy ------------------------------------
+  const makePlan = async (p: GeneratePayload) => {
+    if (!ready) {
       toast.error(t('errors.notConfigured'))
-      settingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setPage('settings')
       return
     }
+    setScriptPayload(p)
+    setPlanBusy(true)
     try {
-      const r = await api.generate({
+      const r = await api.plan({
         script: p.script,
         name: `web-${Date.now().toString(36)}`,
         style: p.style,
-        aspect: p.aspect,
-        draft: p.draft,
         use_llm: p.use_llm,
-        video_provider: p.video_provider,
-        voice_provider: p.voice_provider,
+      })
+      setPlan(r)
+      onLog(`> plan ${r.plan_id} · ${r.scenes.length} scenes`)
+      setStep('confirm')
+      toast.success(t('confirm.planned', { n: r.scenes.length }))
+    } catch (e) {
+      const msg = errorText(e)
+      toast.error(msg)
+      onLog(`ERROR: ${msg}`)
+    } finally {
+      setPlanBusy(false)
+    }
+  }
+
+  const reparse = () => {
+    if (scriptPayload) void makePlan(scriptPayload)
+  }
+
+  // ---- step 2 -> 3: confirm -> render (this is the step that spends) ----
+  const confirmScenes = async (scenes: PlanScene[]) => {
+    if (!plan) return
+    if (!ready) {
+      toast.error(t('errors.notConfigured'))
+      setPage('settings')
+      return
+    }
+    const p = scriptPayload
+    try {
+      const r = await api.render({
+        plan_id: plan.plan_id,
+        scenes: scenes.map((s) => ({ id: s.id, vo: s.vo, prompt: s.prompt })),
+        name: plan.name,
+        style: plan.style,
+        aspect: p?.aspect ?? '9:16',
+        draft: p?.draft ?? false,
+        video_provider: p?.video_provider ?? null,
+        voice_provider: p?.voice_provider ?? null,
       })
       setJobId(r.job_id)
-      onLog(`> job_id = ${r.job_id}`)
+      onLog(`> confirmed ${scenes.length} scenes · job ${r.job_id}`)
+      setStep('render')
       watch(r.job_id)
     } catch (e) {
       const msg = errorText(e)
@@ -62,71 +112,186 @@ export default function App() {
     }
   }
 
+  // ---- step 4: conversational edit -> partial re-render -----------------
+  const onEditRender = useCallback(
+    (newJobId: string) => {
+      setJobId(newJobId)
+      onLog(`> re-render job ${newJobId}`)
+      setStep('refine')
+      watch(newJobId)
+    },
+    [onLog, watch],
+  )
+
+  // Advance to refine once the first render lands.
+  useEffect(() => {
+    if (job?.done && !job.error && step === 'render') setStep('refine')
+  }, [job?.done, job?.error, step])
+
+  const maxReached: StepId = useMemo(() => {
+    if (job?.done && !job.error) return 'publish'
+    if (jobId) return 'refine'
+    if (plan) return 'confirm'
+    return 'script'
+  }, [job?.done, job?.error, jobId, plan])
+
   const finished: Job | null = job
 
   return (
     <div className="min-h-screen bg-background">
       <Toaster position="top-center" richColors />
-      <Header ready={Boolean(settings?.video.ready)} />
+      <Header ready={ready} />
 
-      <main className="mx-auto grid max-w-[1400px] grid-cols-1 items-start gap-5 px-6 py-6 lg:grid-cols-[minmax(380px,440px)_1fr]">
-        {/* ------------------------------------------------------------ left */}
-        <div className="space-y-5" ref={settingsRef}>
-          {settings ? (
-            <>
-              <ProviderSettings settings={settings} onSaved={setSettings} />
-              <ScriptPanel
-                settings={settings}
-                running={running}
-                job={job}
-                onGenerate={generate}
-              />
-              <StatusCard settings={settings} />
-            </>
-          ) : (
-            <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground shadow-sm">
-              Loading settings…
-            </div>
-          )}
+      {/* --------------------------------------------------- page switcher */}
+      <nav className="border-b bg-card/60">
+        <div className="mx-auto flex max-w-[1400px] gap-1 px-6 pt-3">
+          {(
+            [
+              ['create', Sparkles, t('nav.create')],
+              ['settings', SettingsIcon, t('nav.settings')],
+            ] as const
+          ).map(([id, Icon, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setPage(id)}
+              className={cn(
+                '-mb-px flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                page === id
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+              {id === 'settings' && !ready ? (
+                <span className="ml-1 rounded-full bg-destructive/15 px-1.5 text-[10px] text-destructive">
+                  !
+                </span>
+              ) : null}
+            </button>
+          ))}
         </div>
+      </nav>
 
-        {/* ----------------------------------------------------------- right */}
-        <div className="space-y-5">
-          <PreviewCard job={finished} />
-
-          {finished?.error ? (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{finished.error}</span>
+      <main className="mx-auto max-w-[1400px] px-6 py-6">
+        {/* ==================================================== settings */}
+        {page === 'settings' ? (
+          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(420px,560px)_1fr]">
+            <div className="space-y-5">
+              {settings ? (
+                <>
+                  <ProviderSettings settings={settings} onSaved={setSettings} />
+                  <StatusCard settings={settings} />
+                </>
+              ) : (
+                <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground shadow-sm">
+                  Loading settings…
+                </div>
+              )}
             </div>
-          ) : null}
-
-          <section className="rounded-lg border bg-card shadow-sm">
-            <Tabs defaultValue="edit" className="p-5">
-              <TabsList>
-                <TabsTrigger value="edit">{t('edit.tab')}</TabsTrigger>
-                <TabsTrigger value="publish">{t('publish.tab')}</TabsTrigger>
-                <TabsTrigger value="log">{t('log.tab')}</TabsTrigger>
-              </TabsList>
-              <TabsContent value="edit">
-                <EditPanel jobId={jobId} />
-              </TabsContent>
-              <TabsContent value="publish">
-                <PublishPanel videoUrl={finished?.video_url ?? null} />
-              </TabsContent>
-              <TabsContent value="log">
-                <LogPanel lines={lines} />
-              </TabsContent>
-            </Tabs>
-          </section>
-
-          {jobId ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="outline">job {jobId}</Badge>
-              {finished?.done ? t('stage.done') : t('stage.queued')}
+            <div className="space-y-5">
+              <section className="rounded-lg border bg-card p-5 shadow-sm">
+                <h2 className="text-sm font-semibold">{t('settings.whatTitle')}</h2>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  {t('settings.whatBody')}
+                </p>
+                <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
+                  <li>· {t('settings.point1')}</li>
+                  <li>· {t('settings.point2')}</li>
+                  <li>· {t('settings.point3')}</li>
+                </ul>
+              </section>
+              <LogPanel lines={lines} />
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : (
+          /* ==================================================== create */
+          <div className="space-y-5">
+            <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+              <Stepper current={step} maxReached={maxReached} onSelect={setStep} />
+            </div>
+
+            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(420px,560px)_1fr]">
+              {/* -------------------------------------------------- left */}
+              <div className="space-y-5">
+                {step === 'script' || !settings ? (
+                  settings ? (
+                    <ScriptPanel
+                      settings={settings}
+                      running={planBusy}
+                      job={null}
+                      onPlan={makePlan}
+                    />
+                  ) : (
+                    <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground shadow-sm">
+                      Loading settings…
+                    </div>
+                  )
+                ) : null}
+
+                {step === 'confirm' && plan ? (
+                  <SceneConfirm
+                    scenes={plan.scenes}
+                    busy={running}
+                    onBack={() => setStep('script')}
+                    onReparse={reparse}
+                    onConfirm={confirmScenes}
+                  />
+                ) : null}
+
+                {(step === 'render' || step === 'refine') && settings ? (
+                  <ScriptPanel
+                    settings={settings}
+                    running={running}
+                    job={job}
+                    onPlan={makePlan}
+                  />
+                ) : null}
+
+                {step === 'refine' ? (
+                  <section className="rounded-lg border bg-card p-5 shadow-sm">
+                    <h2 className="mb-3 text-sm font-semibold">{t('edit.title')}</h2>
+                    <EditPanel jobId={jobId} onRender={onEditRender} />
+                  </section>
+                ) : null}
+
+                {step === 'publish' ? (
+                  <section className="rounded-lg border bg-card p-5 shadow-sm">
+                    <h2 className="mb-3 text-sm font-semibold">{t('publish.title')}</h2>
+                    <PublishPanel
+                      videoUrl={finished?.video_url ?? null}
+                      videoPath={finished?.video_path ?? null}
+                    />
+                  </section>
+                ) : null}
+              </div>
+
+              {/* ------------------------------------------------- right */}
+              <div className="space-y-5">
+                <PreviewCard job={finished} />
+
+                {finished?.error ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{finished.error}</span>
+                  </div>
+                ) : null}
+
+                <section className="rounded-lg border bg-card shadow-sm">
+                  <LogPanel lines={lines} />
+                </section>
+
+                {jobId ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline">job {jobId}</Badge>
+                    {finished?.done ? t('stage.done') : t('stage.queued')}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

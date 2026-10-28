@@ -514,3 +514,80 @@ def test_pipeline_always_writes_a_vo_file(tmp_path):
     # the real line got real audio; the punctuation line got silence
     assert assets["s1"].vo_duration > 0.5 and assets["s1"].vo_words
     assert assets["s2"].vo_words == []
+
+
+# --------------------------------------------------------------------------
+# Web: plan -> confirm -> render split
+# --------------------------------------------------------------------------
+
+
+def test_scene_view_and_overrides():
+    """The confirmation UI round-trips editable copy back onto the IR."""
+    import web.server as srv
+    from avb.ir import Scene, Visual, Voiceover
+
+    scene = Scene(
+        id="s1", index=0, beat="hook",
+        vo=Voiceover(text="Original line."),
+        visual=Visual(prompt="original prompt"),
+    )
+
+    view = srv._scene_view(scene)
+    assert view["vo"] == "Original line."
+    assert view["prompt"] == "original prompt"
+    # caption is not a separate field: it is driven by the VO's word timings
+    assert "caption" not in view
+
+    class Ov:
+        def __init__(self, id, vo, prompt):
+            self.id, self.vo, self.prompt = id, vo, prompt
+
+    changed = srv._apply_scene_overrides(
+        type("P", (), {"scenes": [scene]})(),
+        [Ov("s1", "Edited line.", "edited prompt"), Ov("ghost", "x", "y")],
+    )
+    assert changed == 2
+    assert scene.vo.text == "Edited line."
+    assert scene.visual.prompt == "edited prompt"
+
+    # idempotent: re-applying the same values counts as no change
+    assert srv._apply_scene_overrides(
+        type("P", (), {"scenes": [scene]})(), [Ov("s1", "Edited line.", "edited prompt")]
+    ) == 0
+
+    # dict form (what JSON decoding gives you) works too
+    assert srv._apply_scene_overrides(
+        type("P", (), {"scenes": [scene]})(), [{"id": "s1", "vo": "From dict", "prompt": None}]
+    ) == 1
+    assert scene.vo.text == "From dict"
+
+
+def test_plan_requires_a_script_and_rejects_empty():
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import web.server as srv
+
+    for bad in ("", "   ", "\n\n"):
+        try:
+            asyncio.run(srv.create_plan(srv.PlanRequest(script=bad, name="t", style="dr_vsl")))
+        except HTTPException as e:
+            assert e.status_code == 400, e.status_code
+        else:
+            raise AssertionError(f"empty script {bad!r} was accepted")
+
+
+def test_render_rejects_unknown_plan():
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import web.server as srv
+
+    try:
+        asyncio.run(srv.render(srv.RenderRequest(plan_id="does-not-exist", scenes=[])))
+    except HTTPException as e:
+        assert e.status_code == 404
+    else:
+        raise AssertionError("unknown plan_id was accepted")

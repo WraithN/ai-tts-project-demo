@@ -21,7 +21,7 @@ export default {
   },
 
   providers: {
-    title: '0 · Provider 配置',
+    title: 'Provider 配置',
     required: '必填',
     video: '视频生成模型',
     videoHint: '没有离线兜底：每家都是真实模型，必须配 Key 才能出片。',
@@ -96,8 +96,40 @@ export default {
     TIKTOK_REDIRECT_URI: { label: 'Redirect URI', hint: '必须与开发者后台配置的回调地址一致' },
   },
 
+  nav: {
+    create: '创作',
+    settings: '设置',
+  },
+
+  settings: {
+    whatTitle: '这一页在做什么',
+    whatBody:
+      '设置只做一件事：告诉流水线去哪家拿素材。密钥写进 .env（不进 git），选择写进 avb.toml，保存后立刻生效，不用重启。',
+    point1: '视频模型：没有离线兜底，必须配一家才能出片',
+    point2: '配音：Edge TTS 免费无需 key，推荐先用它',
+    point3: 'LLM：负责分镜解析和对话式改片的意图路由',
+  },
+
+  steps: {
+    script: '脚本',
+    confirm: '确认文案',
+    render: '生成视频',
+    refine: '微调',
+    publish: '发布',
+  },
+
+  beat: {
+    hook: '钩子',
+    problem: '痛点',
+    agitate: '放大',
+    mechanism: '机制',
+    proof: '证明',
+    offer: '卖点',
+    cta: '行动号召',
+  },
+
   script: {
-    title: '1 · 广告脚本',
+    title: '广告脚本',
     placeholder:
       '粘贴广告文案，每行一句。例如：\n\nYour afternoon crash is not about willpower. It is about NAD.\nNAD is the molecule your cells use to turn food into energy.\nAfter thirty, it drops. That is why you fade at three PM.\nOur liposomal NMN restores your NAD levels. One capsule.\nForty percent off your first bottle. Tap below.',
     style: '风格',
@@ -107,8 +139,27 @@ export default {
     voice: '配音',
     useLlm: '用 LLM 智能分镜',
     draft: 'Draft 模式（半分辨率快速预览）',
+    plan: '生成场景文案',
+    planning: '解析中…',
     submit: '生成视频',
     submitting: '生成中…',
+  },
+
+  confirm: {
+    title: '确认场景文案与字幕',
+    subtitle: '模型给的只是初稿。这里随便改，改完才会花钱去渲染。',
+    count: '{{n}} 个场景',
+    vo: '口播 / 字幕文案',
+    captionNote: '字幕由这一行的词级时间轴驱动，改它字幕同步变。',
+    prompt: '画面提示词',
+    back: '返回改脚本',
+    reparse: '重新分镜',
+    confirm: '确认，开始生成视频',
+    up: '上移',
+    down: '下移',
+    remove: '删除这一场',
+    spendNote: '点确认后才会调用配音和视频模型，这一步开始计费。',
+    planned: '已生成 {{n}} 个场景，确认后再出片',
   },
 
   style: {
@@ -129,6 +180,7 @@ export default {
 
   stage: {
     queued: '排队中',
+    confirming: '应用确认文案',
     parsing: '解析脚本',
     synth: '合成配音',
     rendering: '渲染场景',
@@ -138,7 +190,7 @@ export default {
   },
 
   preview: {
-    title: '2 · 成片预览',
+    title: '成片预览',
     empty: '生成后在此预览',
     emptySub: '9:16 竖屏 · H.264 + AAC',
     duration: '时长',
@@ -150,8 +202,13 @@ export default {
 
   edit: {
     tab: '对话式改片',
+    title: '4 · 微调',
     placeholder: '描述你想要的改动…',
     analyze: '分析',
+    apply: '应用并重渲染',
+    applySwitch: '应用改动并重渲染',
+    applySwitchHint: '关掉就只看分析结果，不动画面',
+    rebuilding: '正在重渲 {{n}} 个场景（其余 {{total}} 个复用缓存）',
     needJob: '请先生成一个视频',
     welcome: '试试：开头再炸一点 / 中段换成漫画风 / 音乐换暗黑一点',
     scenesAffected: '影响 {{n}} 个场景',
@@ -162,6 +219,7 @@ export default {
 
   publish: {
     tab: '发布 TikTok',
+    title: '5 · 发布到 TikTok',
     caption: '视频标题 / 文案',
     captionPlaceholder: '你的广告文案 #话题标签',
     privacy: '可见性',
@@ -182,7 +240,7 @@ export default {
 
   errors: {
     noScript: '请先粘贴广告脚本',
-    notConfigured: '还没有可用的视频 Provider：请在「Provider 配置」里选一家并填入 API Key 后保存。',
+    notConfigured: '还没有可用的视频 Provider：请先到「设置」页选一家并填入 API Key 后保存。',
     generateFailed: '提交失败：{{msg}}',
   },
 }

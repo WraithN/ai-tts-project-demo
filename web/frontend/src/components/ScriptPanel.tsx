@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, Play, Wand2 } from 'lucide-react'
+import { Loader2, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -32,12 +32,13 @@ export function ScriptPanel({
   settings,
   running,
   job,
-  onGenerate,
+  onPlan,
 }: {
   settings: Settings
   running: boolean
   job: { stage: string; progress: number; message: string } | null
-  onGenerate: (p: GeneratePayload) => void
+  /** Step 1 only produces scene copy; nothing is rendered yet. */
+  onPlan: (p: GeneratePayload) => void
 }) {
   const { t } = useTranslation()
   const [script, setScript] = useState('')
@@ -50,7 +51,7 @@ export function ScriptPanel({
 
   const submit = () => {
     if (!script.trim()) return
-    onGenerate({
+    onPlan({
       script: script.trim(),
       style,
       aspect,
@@ -156,8 +157,8 @@ export function ScriptPanel({
         </div>
 
         <Button className="w-full" onClick={submit} disabled={running || !script.trim()}>
-          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          {running ? t('script.submitting') : t('script.submit')}
+          {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+          {running ? t('script.planning') : t('script.plan')}
         </Button>
 
         {running && job ? (

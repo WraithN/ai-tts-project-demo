@@ -129,6 +129,11 @@ class EditRequest(BaseModel):
     project_json: str | None = None  # serialized IR
     instruction: str
     use_llm: bool = True
+    # False -> only report the plan (preview what would change).
+    # True  -> apply it, invalidate, and re-render just the stale scenes.
+    apply: bool = False
+    draft: bool = False
+    out_name: str | None = None
 
 
 class ConfigUpdate(BaseModel):
@@ -423,8 +428,223 @@ async def list_providers():
 
 
 # ---------------------------------------------------------------------------
-# Routes: generate
+# Routes: plan -> confirm -> render
+#
+# Generation is deliberately split in two. `/api/plan` turns a script into
+# scenes (copy + visual prompts) and stops there; `/api/render` is what
+# actually spends money on TTS and video. Putting a confirmation step between
+# them is the whole point: the model's first guess at scene copy is a draft,
+# and regenerating eight clips because a line read wrong costs real dollars.
 # ---------------------------------------------------------------------------
+# A plan is a *proposal* the user has not approved yet, so it is kept apart
+# from _projects (which holds IRs already promoted into a render job).
+_plans: dict[str, dict] = {}
+
+
+class PlanRequest(BaseModel):
+    script: str
+    name: str = "untitled"
+    style: str = "dr_vsl"
+    use_llm: bool = True
+
+
+class PlanScene(BaseModel):
+    """A user-confirmed (or user-edited) scene, sent back on render."""
+
+    id: str
+    vo: str | None = None
+    prompt: str | None = None
+
+
+class RenderRequest(BaseModel):
+    plan_id: str
+    scenes: list[PlanScene] = []
+    name: str = "untitled"
+    style: str = "dr_vsl"
+    aspect: str = "9:16"
+    fps: int = 30
+    draft: bool = False
+    video_provider: str | None = None
+    voice_provider: str | None = None
+    out_name: str | None = None
+
+
+def _scene_view(scene: object) -> dict:
+    """Flatten one Scene for the confirmation UI.
+
+    `caption` is not a separate field on purpose: kinetic captions are driven
+    by the voiceover's word-level timings, so there is exactly one piece of
+    text per scene and editing it moves the caption too. Exposing them as two
+    independent inputs would be a lie the renderer could not honour.
+    """
+    return {
+        "id": scene.id,
+        "index": scene.index,
+        "beat": scene.beat,
+        "vo": scene.vo.text,
+        "prompt": scene.visual.prompt,
+        "motion": scene.visual.motion,
+        "style": scene.visual.style or "",
+    }
+
+
+def _apply_scene_overrides(project: object, overrides: list[dict]) -> int:
+    """Write confirmed copy back onto the IR. Returns the number changed."""
+    by_id = {s.id: s for s in project.scenes}
+    changed = 0
+    for ov in overrides or []:
+        scene = by_id.get(getattr(ov, "id", None) or (ov or {}).get("id"))
+        if scene is None:
+            continue
+        vo = getattr(ov, "vo", None) if hasattr(ov, "vo") else (ov or {}).get("vo")
+        prompt = getattr(ov, "prompt", None) if hasattr(ov, "prompt") else (ov or {}).get("prompt")
+        if vo is not None and vo != scene.vo.text:
+            scene.vo.text = vo
+            changed += 1
+        if prompt is not None and prompt != scene.visual.prompt:
+            scene.visual.prompt = prompt
+            changed += 1
+    return changed
+
+
+@app.post("/api/plan")
+async def create_plan(req: PlanRequest):
+    """Script -> scenes. No TTS, no video, no spend."""
+    script = (req.script or "").strip()
+    if not script:
+        raise HTTPException(400, "请先粘贴广告脚本")
+    try:
+        if req.use_llm:
+            project = parse_script_llm(script, name=req.name, style=req.style)
+        else:
+            project = parse_script(script, name=req.name, style=req.style)
+    except Exception as e:  # LLM/rule parse both fall back; surface it plainly
+        raise HTTPException(500, f"脚本解析失败：{e}") from e
+
+    if not getattr(project, "scenes", None):
+        raise HTTPException(400, "没能从脚本里解析出任何场景，请换一段文案试试")
+
+    plan_id = uuid.uuid4().hex[:12]
+    _plans[plan_id] = {
+        "project": project,
+        "script": script,
+        "style": req.style,
+        "name": req.name,
+    }
+    # Also register under _projects so /api/edit can patch a plan that has
+    # been rendered under the same id (see /api/render).
+    _projects[plan_id] = project
+    return {
+        "plan_id": plan_id,
+        "name": req.name,
+        "style": req.style,
+        "scenes": [_scene_view(s) for s in project.scenes],
+    }
+
+
+@app.get("/api/plan/{plan_id}")
+async def get_plan(plan_id: str):
+    if plan_id not in _plans:
+        raise HTTPException(404, "Plan not found or expired")
+    p = _plans[plan_id]
+    return {
+        "plan_id": plan_id,
+        "name": p["name"],
+        "style": p["style"],
+        "scenes": [_scene_view(s) for s in p["project"].scenes],
+    }
+
+
+@app.post("/api/render")
+async def render(req: RenderRequest):
+    """Render a confirmed plan. This is the step that costs money."""
+    from avb.assets.video import build_video_provider
+
+    cfg0 = load_config()
+    try:
+        build_video_provider(req.video_provider or cfg0.video.provider)
+    except Exception as e:
+        raise HTTPException(
+            400,
+            "尚未配置可用的视频 Provider。请到「设置」页选择一家并填入 API Key。",
+        ) from e
+
+    if req.plan_id not in _plans:
+        raise HTTPException(404, "Plan not found or expired, please re-run the script step")
+
+    job_id = uuid.uuid4().hex[:12]
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "stage": "queued",
+        "progress": 0.0,
+        "message": "Job queued",
+        "done": False,
+        "error": None,
+        "video_url": None,
+        "cost": None,
+    }
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_render, job_id, req.model_dump())
+    return {"job_id": job_id}
+
+
+def _run_render(job_id: str, params: dict):
+    """Render a confirmed plan in a worker thread."""
+    try:
+        entry = _plans.get(params.get("plan_id", ""))
+        if entry is None:
+            raise RuntimeError("Plan expired before rendering started")
+        project = entry["project"]
+
+        _update_job(job_id, stage="confirming", progress=0.05,
+                     message="Applying confirmed copy...")
+
+        changed = _apply_scene_overrides(project, params.get("scenes") or [])
+        if changed:
+            _update_job(job_id, stage="confirming", progress=0.08,
+                         message=f"Applied {changed} edit(s) to the confirmed copy")
+
+        cfg = load_config()
+        if params.get("video_provider"):
+            cfg.video.provider = params["video_provider"]
+        if params.get("voice_provider"):
+            cfg.voice.provider = params["voice_provider"]
+
+        _update_job(job_id, stage="synth", progress=0.15,
+                     message=f"Rendering {len(project.scenes)} scenes...")
+
+        out_dir = Path("demo/out/web")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = params.get("name") or entry["name"] or "untitled"
+        out_name = params.get("out_name") or f"{name}_{job_id[:6]}.mp4"
+        out_path = out_dir / out_name
+
+        pipe = Pipeline(workdir=".avb_web", draft=params.get("draft", False), config=cfg)
+
+        # Keep the IR alive so /api/edit can patch it without re-parsing, and
+        # so a follow-up render of the same plan reuses the cache.
+        _projects[job_id] = project
+        _projects[params["plan_id"]] = project
+
+        _update_job(job_id, stage="rendering", progress=0.3, message="Rendering scenes...")
+        report = pipe.run(project, out_path)
+
+        def _count(v):
+            return len(v) if isinstance(v, (list, tuple)) else (v or 0)
+
+        _update_job(job_id, stage="done", progress=1.0, message="Complete",
+                     done=True,
+                     video_url=f"/api/video/{out_path.name}",
+                     video_path=str(out_path),
+                     cost=getattr(report, "cost_usd", 0.0),
+                     total_duration=getattr(report, "total_duration", 0.0),
+                     scenes=_count(getattr(report, "scenes", 0)),
+                     rendered=_count(getattr(report, "rendered", 0)),
+                     reused=_count(getattr(report, "reused", 0)))
+    except Exception as e:
+        _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
+
+
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
     # Fail fast with an actionable message rather than burning a job on a
@@ -578,14 +798,80 @@ async def edit(req: EditRequest):
         else:
             plan = plan_edit(project, req.instruction, timings)
 
-        return {
+        out = {
             "intent": plan.intent,
             "scene_ids": plan.scene_ids,
             "ops": [{"path": o.path, "value": o.value} for o in plan.ops],
             "explanation": plan.explanation,
         }
+
+        if not req.apply:
+            return out
+
+        # --- apply and re-render -----------------------------------------
+        # apply_plan returns a NEW project, so the pre-edit version is still
+        # intact: invalidate() diffs the two and we only re-render scenes
+        # whose content hash actually moved. That is the feature the whole
+        # architecture exists for.
+        new_project = apply_plan(project, plan)
+        diff = invalidate(project, new_project)  # Project.diff -> dict
+        stale = set(diff.get("invalidated", []) or diff.get("added", []) or [])
+
+        _projects[req.job_id] = new_project
+
+        job_id = uuid.uuid4().hex[:12]
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "stage": "queued",
+            "progress": 0.0,
+            "message": "Re-rendering edited scenes",
+            "done": False,
+            "error": None,
+            "video_url": None,
+            "cost": None,
+        }
+        asyncio.get_event_loop().run_in_executor(
+            None, _run_rerender, job_id, req.job_id, new_project, sorted(stale),
+            req.out_name, req.draft,
+        )
+        out["job_id"] = job_id
+        out["rebuilt"] = sorted(stale)
+        return out
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+def _run_rerender(job_id: str, src_job_id: str | None, project: object,
+                  stale: list[str], out_name: str | None, draft: bool):
+    """Re-render a project after an edit, rebuilding only the stale scenes."""
+    try:
+        cfg = load_config()
+        out_dir = Path("demo/out/web")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = getattr(project, "name", "untitled") or "untitled"
+        path = out_dir / (out_name or f"{name}_edit_{job_id[:6]}.mp4")
+
+        only = set(stale) or None
+        _update_job(job_id, stage="rendering", progress=0.2,
+                     message=f"Rebuilding {len(only) if only else len(project.scenes)} scene(s)...")
+
+        pipe = Pipeline(workdir=".avb_web", draft=draft, config=cfg)
+        _projects[job_id] = project
+        report = pipe.run(project, path, only=only)
+
+        def _count(v):
+            return len(v) if isinstance(v, (list, tuple)) else (v or 0)
+
+        _update_job(job_id, stage="done", progress=1.0, message="Complete", done=True,
+                     video_url=f"/api/video/{path.name}",
+                     video_path=str(path),
+                     cost=getattr(report, "cost_usd", 0.0),
+                     total_duration=getattr(report, "total_duration", 0.0),
+                     scenes=_count(getattr(report, "scenes", 0)),
+                     rendered=_count(getattr(report, "rendered", 0)),
+                     reused=_count(getattr(report, "reused", 0)))
+    except Exception as e:
+        _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
 
 
 # ---------------------------------------------------------------------------

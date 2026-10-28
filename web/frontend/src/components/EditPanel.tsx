@@ -4,6 +4,7 @@ import { CornerDownLeft, Loader2, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { api, errorText } from '@/lib/api'
+import { Switch } from '@/components/ui/primitives'
 import { cn } from '@/lib/utils'
 
 interface Turn {
@@ -12,10 +13,18 @@ interface Turn {
   meta?: string
 }
 
-export function EditPanel({ jobId }: { jobId: string | null }) {
+export function EditPanel({
+  jobId,
+  onRender,
+}: {
+  jobId: string | null
+  /** Called with the new job id when an edit triggers a partial re-render. */
+  onRender: (jobId: string) => void
+}) {
   const { t } = useTranslation()
   const [instruction, setInstruction] = useState('')
   const [busy, setBusy] = useState(false)
+  const [apply, setApply] = useState(true)
   const [turns, setTurns] = useState<Turn[]>([{ role: 'system', text: t('edit.welcome') }])
 
   const send = async () => {
@@ -29,7 +38,18 @@ export function EditPanel({ jobId }: { jobId: string | null }) {
     setInstruction('')
     setBusy(true)
     try {
-      const r = await api.planEdit({ job_id: jobId, instruction: text, use_llm: true })
+      const r = await api.planEdit({
+        job_id: jobId,
+        instruction: text,
+        use_llm: true,
+        apply,
+      })
+      let meta = r.explanation || t('edit.analysisOnly')
+      if (r.job_id) {
+        const rebuilt = r.rebuilt?.length ?? 0
+        meta = t('edit.rebuilding', { n: rebuilt, total: r.scene_ids.length || rebuilt })
+        onRender(r.job_id)
+      }
       setTurns((v) => [
         ...v.slice(0, -1),
         {
@@ -37,7 +57,7 @@ export function EditPanel({ jobId }: { jobId: string | null }) {
           text: `${r.intent} · ${t('edit.scenesAffected', { n: r.scene_ids.length })}\n${r.ops
             .map((o) => `${o.path} = ${JSON.stringify(o.value)}`)
             .join('\n')}`,
-          meta: r.explanation || t('edit.analysisOnly'),
+          meta,
         },
       ])
     } catch (e) {
@@ -79,9 +99,17 @@ export function EditPanel({ jobId }: { jobId: string | null }) {
         />
         <Button onClick={send} disabled={busy || !instruction.trim()} className="shrink-0">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
-          {t('edit.analyze')}
+          {apply ? t('edit.apply') : t('edit.analyze')}
         </Button>
       </div>
+
+      <label className="flex items-center justify-between gap-3 rounded-md border p-2.5 text-xs">
+        <span>
+          <span className="font-medium">{t('edit.applySwitch')}</span>
+          <span className="mt-0.5 block text-muted-foreground">{t('edit.applySwitchHint')}</span>
+        </span>
+        <Switch checked={apply} onCheckedChange={setApply} />
+      </label>
 
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <CornerDownLeft className="h-3 w-3" />

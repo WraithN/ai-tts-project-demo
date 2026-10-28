@@ -23,7 +23,7 @@ const en: typeof zh = {
   },
 
   providers: {
-    title: '0 · Provider settings',
+    title: 'Provider settings',
     required: 'required',
     video: 'Video model',
     videoHint: 'No offline fallback: every vendor is a hosted model and needs a key.',
@@ -111,8 +111,40 @@ const en: typeof zh = {
     TIKTOK_REDIRECT_URI: { label: 'Redirect URI', hint: 'Must match the callback registered in the portal' },
   },
 
+  nav: {
+    create: 'Create',
+    settings: 'Settings',
+  },
+
+  settings: {
+    whatTitle: 'What this page does',
+    whatBody:
+      'Settings does exactly one thing: tell the pipeline which vendor to fetch footage from. Keys go to .env (gitignored), choices go to avb.toml, and both take effect immediately — no restart.',
+    point1: 'Video model: there is no offline fallback, so one must be configured',
+    point2: 'Voiceover: Edge TTS is free and needs no key — start there',
+    point3: 'LLM: scene planning and the intent router for conversational edits',
+  },
+
+  steps: {
+    script: 'Script',
+    confirm: 'Confirm copy',
+    render: 'Render',
+    refine: 'Refine',
+    publish: 'Publish',
+  },
+
+  beat: {
+    hook: 'hook',
+    problem: 'problem',
+    agitate: 'agitate',
+    mechanism: 'mechanism',
+    proof: 'proof',
+    offer: 'offer',
+    cta: 'CTA',
+  },
+
   script: {
-    title: '1 · Ad script',
+    title: 'Ad script',
     placeholder:
       'Paste your ad copy, one line per sentence. e.g.\n\nYour afternoon crash is not about willpower. It is about NAD.\nNAD is the molecule your cells use to turn food into energy.\nAfter thirty, it drops. That is why you fade at three PM.\nOur liposomal NMN restores your NAD levels. One capsule.\nForty percent off your first bottle. Tap below.',
     style: 'Style',
@@ -122,8 +154,29 @@ const en: typeof zh = {
     voice: 'Voiceover',
     useLlm: 'LLM scene planning',
     draft: 'Draft mode (half resolution, fast preview)',
+    plan: 'Draft scene copy',
+    planning: 'Planning…',
     submit: 'Generate video',
     submitting: 'Generating…',
+  },
+
+  confirm: {
+    title: 'Confirm scene copy and captions',
+    subtitle:
+      "What the model produced is a first draft. Edit anything here — nothing is rendered until you confirm.",
+    count: '{{n}} scenes',
+    vo: 'Voiceover / caption text',
+    captionNote:
+      'Captions are driven by this line’s word-level timings, so editing it moves the caption too.',
+    prompt: 'Visual prompt',
+    back: 'Back to script',
+    reparse: 'Re-plan',
+    confirm: 'Confirm and render',
+    up: 'Move up',
+    down: 'Move down',
+    remove: 'Remove this scene',
+    spendNote: 'Confirming is what calls the voice and video models — billing starts here.',
+    planned: '{{n}} scenes drafted — confirm to render',
   },
 
   style: {
@@ -144,6 +197,7 @@ const en: typeof zh = {
 
   stage: {
     queued: 'queued',
+    confirming: 'applying confirmed copy',
     parsing: 'parsing script',
     synth: 'voiceover',
     rendering: 'rendering',
@@ -153,7 +207,7 @@ const en: typeof zh = {
   },
 
   preview: {
-    title: '2 · Preview',
+    title: 'Preview',
     empty: 'Your video appears here',
     emptySub: '9:16 vertical · H.264 + AAC',
     duration: 'duration',
@@ -165,8 +219,13 @@ const en: typeof zh = {
 
   edit: {
     tab: 'Conversational edit',
+    title: '4 · Refine',
     placeholder: 'Describe the change you want…',
     analyze: 'Analyze',
+    apply: 'Apply and re-render',
+    applySwitch: 'Apply the change and re-render',
+    applySwitchHint: 'Turn off to see the analysis without touching the footage',
+    rebuilding: 'Re-rendering {{n}} scene(s); the other {{total}} come from cache',
     needJob: 'Generate a video first',
     welcome: 'Try: punchier opening / make the middle comic / darker music',
     scenesAffected: '{{n}} scenes affected',
@@ -177,6 +236,7 @@ const en: typeof zh = {
 
   publish: {
     tab: 'Publish',
+    title: '5 · Publish to TikTok',
     caption: 'Title / caption',
     captionPlaceholder: 'Your ad copy #hashtags',
     privacy: 'Visibility',
@@ -198,7 +258,7 @@ const en: typeof zh = {
   errors: {
     noScript: 'Paste an ad script first',
     notConfigured:
-      'No usable video provider yet: pick one in Provider settings, fill in its API key, and save.',
+      'No usable video provider yet: open Settings, pick a vendor, fill in its API key, and save.',
     generateFailed: 'Submit failed: {{msg}}',
   },
 }
