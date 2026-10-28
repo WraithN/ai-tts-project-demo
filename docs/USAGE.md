@@ -290,6 +290,7 @@ cache.
 | edit returns `intent: unknown` | phrasing the router did not understand | try rephrasing, or drop `--rules-only`; the LLM path handles far more than the rules |
 | render is slow | full re-render | use `--only` with the stale set from the edit; check `reused:` count |
 | `WindowsError` on cache writes | parallel cache races (older versions) | upgrade — `Cache.put` is now atomic |
+| `No audio was received. Please verify that your parameters are correct.` | edge-tts got a line with nothing to pronounce (`""`, `...`, `--`, `♪`) | harmless now — that line renders as a beat of silence via the offline voice. To silence the warning, delete punctuation-only separator lines from the script |
 
 ---
 

@@ -178,30 +178,50 @@ def test_voice_registry_fallback():
     assert isinstance(v, FormantVoice)
 
 
+# Every env var any video adapter reads. Selection tests must clear all of
+# them, otherwise a real key sitting in .env decides the outcome and the test
+# silently stops testing anything.
+VIDEO_ENV_VARS = (
+    "SEEDANCE_API_KEY", "SEEDANCE_MODEL", "KLING_API_KEY", "GOOGLE_API_KEY",
+    "BAILIAN_API_KEY", "MINIMAX_API_KEY", "ZHIPU_API_KEY",
+    "VOLC_ACCESS_KEY", "VOLC_SECRET_KEY", "VIDU_API_KEY", "AVB_VIDEO_PROVIDER",
+)
+
+
+def _clear_video_env(monkeypatch):
+    for k in VIDEO_ENV_VARS:
+        monkeypatch.delenv(k, raising=False)
+
+
 def test_video_provider_selection_by_env(monkeypatch):
-    """With a key present, that provider wins; with none, selection fails loudly."""
+    """With exactly one key present, that provider wins; with none, fail loudly."""
     from avb.assets.video import KlingVideo, ProviderUnavailable, build_video_provider
 
+    _clear_video_env(monkeypatch)
     monkeypatch.setenv("KLING_API_KEY", "k-test")
     v = build_video_provider()
     assert isinstance(v, KlingVideo)
 
     monkeypatch.delenv("KLING_API_KEY", raising=False)
-    for k in ("SEEDANCE_API_KEY", "GOOGLE_API_KEY", "BAILIAN_API_KEY",
-              "MINIMAX_API_KEY", "ZHIPU_API_KEY", "VOLC_ACCESS_KEY", "VOLC_SECRET_KEY"):
-        monkeypatch.delenv(k, raising=False)
     with pytest.raises(ProviderUnavailable) as ei:
         build_video_provider()
     assert "KLING_API_KEY" in str(ei.value)
 
 
 def test_video_provider_explicit_but_unconfigured(monkeypatch):
+    """An explicit pick with no key falls through to the next configured one."""
     from avb.assets.video import ProviderUnavailable, build_video_provider
 
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    _clear_video_env(monkeypatch)
+    # nobody configured -> the explicit vendor is named in the error
     with pytest.raises(ProviderUnavailable) as ei:
         build_video_provider("veo")
     assert "GOOGLE_API_KEY" in str(ei.value)
+
+    # somebody else configured -> we keep rendering, but warn loudly
+    monkeypatch.setenv("KLING_API_KEY", "k-test")
+    v = build_video_provider("veo")
+    assert v.name != "veo"
 
 
 def test_write_env_preserves_comments(tmp_path):
@@ -395,3 +415,102 @@ def test_seedance_model_overridable(monkeypatch):
     monkeypatch.setenv("SEEDANCE_API_KEY", "k")
     s = v.SeedanceVideo()
     assert s.model == "doubao-seedance-2-0-mini", s.model
+
+
+# --------------------------------------------------------------------------
+# Voiceover: empty / non-pronounceable lines must not kill the render
+# --------------------------------------------------------------------------
+
+
+def test_speakable_detects_pronounceable_text():
+    from avb.assets.voice import speakable
+
+    for good in ["Real line.", "a", "199", "你好", "Tom & Jerry"]:
+        assert speakable(good), good
+    for bad in ["", "   ", "\n", "...", "—", "--", "♪♪", "·", "()"]:
+        assert not speakable(bad), repr(bad)
+
+
+def test_edge_voice_returns_silence_for_empty_line(tmp_path):
+    """Edge raises NoAudioReceived on punctuation-only text; we must survive it."""
+    from avb.assets.base import Cache
+    from avb.assets.voice import EdgeVoice
+
+    ev = EdgeVoice()
+    if not ev.available():
+        import pytest
+
+        pytest.skip("edge-tts not installed")
+
+    for text in ["", "   ", "...", "—", "♪♪"]:
+        res = ev.synth(text, voice="adam", speed=1.0, energy=1.0, cache=Cache(tmp_path))
+        assert res.path.is_file(), text
+        assert res.duration > 0, text
+        assert res.words == [], text
+
+
+def test_edge_voice_falls_back_when_endpoint_returns_no_audio(tmp_path, monkeypatch):
+    """Simulate a Microsoft-side blip: any exception -> offline formant voice."""
+    from avb.assets.base import Cache
+    from avb.assets.voice import EdgeVoice
+
+    ev = EdgeVoice()
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated upstream failure")
+
+    monkeypatch.setattr(ev, "_synth_edge", boom)
+    res = ev.synth("A real line.", voice="adam", speed=1.0, energy=1.0, cache=Cache(tmp_path))
+    assert res.path.is_file()
+    assert res.duration > 0
+
+
+def test_pipeline_always_writes_a_vo_file(tmp_path):
+    """A punctuation-only line must still leave a real vo.wav behind.
+
+    load_assets() only counts a scene as reusable when vo.wav and bg.png both
+    exist, so a skipped line used to silently drop the scene from the cache.
+    """
+    from avb.assets.base import Cost, Provider
+    from avb.ir import Project, Scene, Visual, Voiceover
+    from avb.pipeline import Pipeline
+
+    class StubVideo(Provider):
+        name = "stub-video"
+        kind = "video"
+
+        def available(self):
+            return True
+
+        def price(self, **_):
+            return 0.0
+
+        def generate(self, prompt, style, seed, seconds, w, h, cache):
+            from PIL import Image
+
+            d = cache.root / "stub"
+            d.mkdir(parents=True, exist_ok=True)
+            f = d / f"{seed}.png"
+            Image.new("RGB", (w, h), (0, 0, 0)).save(f)
+            return type("R", (), {
+                "path": f, "duration": seconds, "cached": False,
+                "cost": Cost(self.name, "video", 0.0),
+            })()
+
+    pipe = Pipeline(tmp_path / "work", draft=True)
+    pipe.video = StubVideo()
+
+    proj = Project(id="t", name="t", style="dr_vsl", scenes=[
+        Scene(id="s1", beat="hook",
+              vo=Voiceover(text="Real line.", voice="adam"),
+              visual=Visual(prompt="x", seed=1)),
+        Scene(id="s2", beat="mechanism",
+              vo=Voiceover(text="...", voice="adam"),
+              visual=Visual(prompt="x", seed=2)),
+    ])
+    assets = pipe.synth(proj)
+    for s in proj.scenes:
+        assert assets[s.id].vo.is_file(), s.vo.text
+    # the real line got real audio; the punctuation line got silence
+    assert assets["s1"].vo_duration > 0.5 and assets["s1"].vo_words
+    assert assets["s2"].vo_words == []

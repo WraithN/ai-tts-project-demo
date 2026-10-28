@@ -35,10 +35,13 @@ edge = ["edge-tts>=7.0"]
 # Comfort dependencies for the CLI. Purely optional.
 cli = ["rich>=13.0"]
 # Web app: browser UI + REST/WebSocket API + TikTok publishing.
-web = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
+# `uvicorn[standard]` (not plain `uvicorn`) is required: it pulls in
+# `websockets`, without which uvicorn answers every /ws/... upgrade with
+# "Unsupported upgrade request" -> 404, and the UI silently drops to polling.
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
 # Everything the default install is happy to use.
 all = ["edge-tts>=7.0", "rich>=13.0",
-       "fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
+       "fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
 
 [project.scripts]
 avb = "avb.cli:main"

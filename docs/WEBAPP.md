@@ -7,7 +7,13 @@ python -m uvicorn web.server:app --port 8787
 # 打开 http://127.0.0.1:8787
 ```
 
-需要 `pip install fastapi uvicorn`（或 `pip install -e ".[web]"`）。
+需要 `pip install -e ".[web]"`。
+
+依赖里必须是 **`uvicorn[standard]` 而不是裸 `uvicorn`**：前者会带上 `websockets`，
+没有它 uvicorn 完全处理不了 WebSocket 升级，每个 `/ws/...` 请求都会返回 404，
+进度条就只能退化成前端轮询（功能还在，但进度不实时）。
+
+等价命令：`pip install fastapi "uvicorn[standard]" python-multipart`。
 
 ## 前端技术栈
 

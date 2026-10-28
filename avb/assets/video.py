@@ -620,6 +620,15 @@ def build_video_provider(prefer: str | None = None) -> Provider:
             continue
         inst = cls()
         if inst.available():
+            if want not in ("", "auto") and key != want:
+                # An explicit pick that could not be honoured is worth
+                # shouting about: the user asked for Kling and is getting
+                # Seedance. Better to keep rendering than to fail, but never
+                # do it silently.
+                print(
+                    f"  !! video provider '{want}' is not configured "
+                    f"(needs {', '.join(required_envs(want))}); using '{key}' instead"
+                )
             return inst
         missing[key] = required_envs(key)
 

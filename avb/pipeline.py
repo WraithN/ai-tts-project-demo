@@ -26,7 +26,7 @@ from .hashing import short_hash
 from .assets.base import Cache, CostLedger
 from .assets.music import SynthMusic, render_track, sfx
 from .assets.video import build_video_provider
-from .assets.voice import ElevenLabsVoice, FormantVoice, build_voice_provider
+from .assets.voice import ElevenLabsVoice, FormantVoice, build_voice_provider, speakable
 from .ir import Project, Scene
 from .config import Config
 from .qc import run_qc
@@ -79,9 +79,14 @@ class Pipeline:
         workers: int = 0,
         config: "Config | None" = None,
     ) -> None:
-        from .config import Config
+        from .config import load_config
 
-        self.config = config or Config()
+        # load_config(), not Config(): it is the only one that pulls in .env,
+        # which is where every API key lives. A bare Config() here meant the
+        # CLI (`avb render`) saw no credentials at all while the web app --
+        # which calls load_dotenv() at import -- worked fine. Same trap as
+        # llm.get_client().
+        self.config = config or load_config()
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.cache = Cache(self.workdir / "cache")
@@ -128,8 +133,13 @@ class Pipeline:
             vo_path = sd / "vo.wav"
             words: list[dict] = []
             dur = 0.0
-            if scene.vo.text.strip():
-                res = self.voice.synth(
+            # Unpronounceable lines ("" / "..." / "--") go to the offline
+            # synth, which renders a beat of silence. Every scene getting a
+            # real vo.wav on disk matters: load_assets() keys cache reuse off
+            # the file existing, so a missing one silently drops the scene.
+            speaker = self.voice if speakable(scene.vo.text) else FormantVoice()
+            if scene.vo.text is not None:
+                res = speaker.synth(
                     scene.vo.text,
                     voice=scene.vo.voice,
                     speed=scene.vo.speed,

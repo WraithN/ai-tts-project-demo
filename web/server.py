@@ -162,8 +162,11 @@ class SettingsUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes: frontend
 # ---------------------------------------------------------------------------
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def index():
+    # Starlette does not answer HEAD for a GET-only route, and the IDE's
+    # preview panel probes with HEAD -- without this it concluded nothing was
+    # listening on a perfectly healthy server.
     if DIST.is_dir():
         return FileResponse(str(DIST / "index.html"))
     return FileResponse(str(STATIC / "index.html"))

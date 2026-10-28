@@ -553,6 +553,26 @@ class EdgeVoice(Provider):
     def synth(self, text: str, voice: str, speed: float, energy: float, cache: Cache) -> VoiceResult:
         import asyncio
 
+        # Nothing to pronounce -> let the offline synth produce the beat of
+        # silence. Asking Edge would raise NoAudioReceived (see `speakable`).
+        if not speakable(text):
+            return FormantVoice().synth(text, voice, speed, energy, cache)
+
+        try:
+            return self._synth_edge(text, voice, speed, energy, cache)
+        except Exception as exc:  # network, rate limit, bad voice id, ...
+            # Edge is a free unofficial endpoint, so it owes us nothing. A
+            # whole render should not die because Microsoft blipped -- drop to
+            # the offline voice and say so loudly in the log.
+            print(f"  !! edge-tts failed ({type(exc).__name__}: {exc}); "
+                  f"falling back to offline formant voice for this line")
+            return FormantVoice().synth(text, voice, speed, energy, cache)
+
+    def _synth_edge(
+        self, text: str, voice: str, speed: float, energy: float, cache: Cache
+    ) -> VoiceResult:
+        import asyncio
+
         import edge_tts
 
         voice_id = self.VOICES.get(voice, voice) if voice else self.VOICES["expert_female"]
@@ -629,6 +649,22 @@ class EdgeVoice(Provider):
             cached=False,
             cost=Cost(self.name, "voice", 0.0, len(text), "char"),
         )
+
+
+_SPEAKABLE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def speakable(text: str | None) -> bool:
+    """True if `text` has anything a TTS engine can actually pronounce.
+
+    Edge's endpoint is the reason this exists: feed it `"..."`, `"--"` or
+    `"♪♪"` and it happily completes the WebSocket stream having emitted zero
+    audio bytes, then raises `NoAudioReceived` at the end. That is not a
+    failure of the request, it is an empty result -- and it used to take the
+    whole render down. `"🎉"` is fine (Edge narrates it), plain punctuation
+    is not, hence "has at least one alphanumeric" rather than "is printable".
+    """
+    return bool(text) and bool(_SPEAKABLE.search(text))
 
 
 def _mp3_duration(path: Path) -> float:
