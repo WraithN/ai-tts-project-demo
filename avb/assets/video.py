@@ -62,9 +62,18 @@ class _AsyncVideoBase(Provider):
     price_per_sec = 0.10
     submit_url = ""
     env_key = ""
+    # Model revision: env override wins, class default otherwise. Vendors rev
+    # these identifiers constantly, so a stale id is the commonest failure --
+    # being able to set it without a code change is the point.
+    model_env = ""
+    default_model = ""
 
     def __init__(self) -> None:
         self.api_key = os.environ.get(self.env_key, "")
+
+    @property
+    def model(self) -> str:
+        return (os.environ.get(self.model_env, "") or self.default_model).strip()
 
     def available(self) -> bool:
         return bool(self.api_key)
@@ -108,7 +117,11 @@ class VeoVideo(_AsyncVideoBase):
     name = "veo-3.1"
     env_key = "GOOGLE_API_KEY"
     price_per_sec = 0.40  # 1080p standard
-    submit_url = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-generate-001:predictLongRunning"
+    model_env = "VEO_MODEL"
+    default_model = "veo-3.1-generate-001"
+    # The model id is part of the path, not the body -- so it is templated
+    # per request rather than baked into `submit_url`.
+    submit_url = "https://generativelanguage.googleapis.com/v1beta/models"
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
         payload = {
@@ -120,7 +133,8 @@ class VeoVideo(_AsyncVideoBase):
                 "sampleCount": 1,
             },
         }
-        r = requests.post(f"{self.submit_url}?key={self.api_key}", json=payload, timeout=120)
+        url = f"{self.submit_url}/{self.model}:predictLongRunning?key={self.api_key}"
+        r = requests.post(url, json=payload, timeout=120)
         r.raise_for_status()
         return r.json()["name"]
 
@@ -143,11 +157,13 @@ class KlingVideo(_AsyncVideoBase):
     name = "kling-3.0"
     env_key = "KLING_API_KEY"
     price_per_sec = 0.10
+    model_env = "KLING_MODEL"
+    default_model = "kling-v3"
     submit_url = "https://api.klingai.com/v1/videos/text2video"
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
         payload = {
-            "model_name": "kling-v3",
+            "model_name": self.model,
             "prompt": prompt,
             "duration": "5" if seconds <= 5 else "10",
             "aspect_ratio": "9:16",
@@ -197,6 +213,8 @@ class BailianVideo(_AsyncVideoBase):
 
     name = "bailian-wan"
     env_key = "BAILIAN_API_KEY"
+    model_env = "BAILIAN_MODEL"
+    default_model = "wan2.5-t2v-preview"
     price_per_sec = 0.08  # 720p list-rate equivalent
     submit_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
 
@@ -207,7 +225,7 @@ class BailianVideo(_AsyncVideoBase):
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
         payload = {
-            "model": "wan2.2-t2v-plus",
+            "model": self.model,
             "input": {"prompt": prompt},
             "parameters": {
                 "size": "720*1280",
@@ -234,41 +252,101 @@ class BailianVideo(_AsyncVideoBase):
 
 
 class MiniMaxVideo(_AsyncVideoBase):
-    """MiniMax Hailuo. Strongest filmic realism in the domestic set."""
+    """MiniMax Hailuo (video-01 / Hailuo-02 / Hailuo-2.3).
+
+    Three steps, not two, and the third one is where the naive version of
+    this adapter broke:
+
+        POST /v1/video_generation                  -> task_id
+        GET  /v1/query/video_generation?task_id=..  -> status + file_id
+        GET  /v1/files/retrieve?file_id=..          -> {file:{download_url}}
+
+    `files/retrieve` answers *JSON pointing at* the mp4, not the mp4. Handing
+    that URL to the base class' downloader used to write a ~200 byte file of
+    JSON named .mp4, which then failed deep inside ffmpeg on the first scene.
+    So `_poll` resolves the download link itself and only then lets the base
+    class fetch bytes.
+
+    Two more vendor specifics:
+      - Host differs by account region: intl `api.minimax.io`, mainland
+        `api.minimaxi.com`. Override with MINIMAX_BASE_URL.
+      - duration is 6 or 10 only, and 1080P caps at 6s; 768P is the default
+        because it is the one combination that supports both.
+    """
 
     name = "minimax-hailuo"
     env_key = "MINIMAX_API_KEY"
-    price_per_sec = 0.06
-    submit_url = "https://api.minimaxi.com/v1/video_generation"
+    model_env = "MINIMAX_MODEL"
+    default_model = "MiniMax-Hailuo-02"
+    price_per_sec = 0.045  # 768P list rate
+    default_base = "https://api.minimax.io/v1"
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get(self.env_key, "")
+        self.base = (os.environ.get("MINIMAX_BASE_URL", "") or self.default_base).rstrip("/")
+        # Group-billed accounts need this; personal keys do not.
+        self.group_id = os.environ.get("MINIMAX_GROUP_ID", "")
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.group_id:
+            h["GroupId"] = self.group_id
+        return h
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
         payload = {
-            "model": "Hailuo-02",
+            "model": self.model,
             "prompt": prompt,
-            "duration": int(max(3, min(10, seconds))),
+            # 6 or 10, nothing else; 1080P would force 6 and cost 2x, so the
+            # resolution stays at the default 768P.
+            "duration": 6 if seconds <= 6 else 10,
             "resolution": "768P",
+            # The pipeline already writes cinematic prompts; letting the
+            # vendor rewrite them makes scene diffs non-deterministic.
+            "prompt_optimizer": False,
         }
-        r = requests.post(self.submit_url, json=payload, headers=self._headers(), timeout=120)
+        r = requests.post(f"{self.base}/video_generation", json=payload, headers=self._headers(), timeout=120)
         r.raise_for_status()
-        return r.json()["base_resp"]["task_id"] if "base_resp" in r.json() else r.json()["task_id"]
+        d = r.json()
+        base_resp = d.get("base_resp") or {}
+        if base_resp.get("status_code"):
+            raise RuntimeError(f"MiniMax submit failed: {base_resp.get('status_msg', d)}")
+        task_id = d.get("task_id")
+        if not task_id:
+            raise RuntimeError(f"MiniMax returned no task_id: {d}")
+        return str(task_id)
 
     def _poll(self, job_id: str, timeout: float = 900.0) -> str:
-        url = f"https://api.minimaxi.com/v1/query/video_generation?task_id={job_id}"
+        url = f"{self.base}/query/video_generation?task_id={job_id}"
         deadline = time.time() + timeout
         while time.time() < deadline:
             r = requests.get(url, headers=self._headers(), timeout=60)
             r.raise_for_status()
             d = r.json()
-            status = d.get("status")
-            if status == "Success":
-                return d.get("file_id") and f"https://api.minimaxi.com/v1/files/retrieve?file_id={d['file_id']}"
-            if status == "Fail":
-                raise RuntimeError(d.get("base_resp", {}).get("status_msg", "MiniMax generation failed"))
+            status = str(d.get("status", "")).lower()
+            if status == "success":
+                file_id = d.get("file_id")
+                if not file_id:
+                    raise RuntimeError(f"MiniMax finished but returned no file_id: {d}")
+                return self._retrieve(file_id)
+            if status == "fail":
+                raise RuntimeError(
+                    (d.get("base_resp") or {}).get("status_msg") or f"MiniMax generation failed: {d}"
+                )
             time.sleep(6)
         raise TimeoutError(f"MiniMax job {job_id} timed out")
+
+    def _retrieve(self, file_id: str) -> str:
+        """file_id -> the actual mp4 URL (the retrieve endpoint returns JSON)."""
+        r = requests.get(
+            f"{self.base}/files/retrieve?file_id={file_id}", headers=self._headers(), timeout=60
+        )
+        r.raise_for_status()
+        d = r.json()
+        url = (d.get("file") or {}).get("download_url") or d.get("download_url")
+        if not url:
+            raise RuntimeError(f"MiniMax retrieve returned no download_url: {d}")
+        return url
 
 
 class ZhipuVideo(_AsyncVideoBase):
@@ -281,11 +359,13 @@ class ZhipuVideo(_AsyncVideoBase):
 
     name = "zhipu-cogvideox"
     env_key = "ZHIPU_API_KEY"
+    model_env = "ZHIPU_MODEL"
+    default_model = "cogvideox-2"
     price_per_sec = 0.07
     submit_url = "https://open.bigmodel.cn/api/paas/v4/videos/generations"
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
-        payload = {"model": "cogvideox-2", "prompt": prompt}
+        payload = {"model": self.model, "prompt": prompt}
         r = requests.post(self.submit_url, json=payload, headers=self._headers(), timeout=120)
         r.raise_for_status()
         return r.json()["id"]
@@ -411,11 +491,17 @@ class JimengVideo(_AsyncVideoBase):
     submit_url = "https://visual.volcengineapi.com"
     env_key = "VOLC_ACCESS_KEY"
     env_key_secret = "VOLC_SECRET_KEY"
+    # req_key *is* the model selector on this API.
+    model_env = "JIMENG_REQ_KEY"
+    default_model = "jimeng_vgfm_t2v_l20"
 
     def __init__(self) -> None:
         self.api_key = os.environ.get(self.env_key, "")
         self.secret_key = os.environ.get(self.env_key_secret, "")
-        self.req_key = os.environ.get("JIMENG_REQ_KEY", "jimeng_vgfm_t2v_l20")
+
+    @property
+    def req_key(self) -> str:
+        return self.model
 
     def available(self) -> bool:
         return bool(self.api_key and self.secret_key)
@@ -508,12 +594,10 @@ class SeedanceVideo(_AsyncVideoBase):
 
     name = "seedance"
     env_key = "SEEDANCE_API_KEY"
+    model_env = "SEEDANCE_MODEL"
+    default_model = "doubao-seedance-2-0-pro"
     price_per_sec = 0.05  # rough USD equivalent of token billing
     submit_url = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
-
-    def __init__(self) -> None:
-        self.api_key = os.environ.get(self.env_key, "")
-        self.model = os.environ.get("SEEDANCE_MODEL", "doubao-seedance-2-0-pro")
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
         payload = {

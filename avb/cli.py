@@ -365,16 +365,30 @@ def cmd_providers(args) -> int:
         marker = " <- selected" if key == cfg.voice.provider or (cfg.voice.provider == "auto" and key == "edge") else ""
         print(f"  {key:<12} {avail:<10} {note}{marker}")
 
+    # Model ids are per-vendor env vars, so `avb providers` is the quickest
+    # way to see which revision a run would actually hit.
+    from .provider_specs import VIDEO_SPECS
+
+    from .assets.video import build_video_provider
+
+    try:
+        active = build_video_provider(cfg.video.provider).name
+    except Exception:
+        active = ""
+
     print("\nVIDEO")
-    print(f"  {'name':<12} {'available':<10} notes")
-    for key, cls in sorted(VIDEO_REGISTRY.items()):
+    print(f"  {'name':<12} {'available':<10} model")
+    for spec in VIDEO_SPECS:
+        cls = VIDEO_REGISTRY.get(spec.key)
         try:
             inst = cls()
-            avail = "yes" if inst.available() else "no"
-            note = getattr(inst, "name", key)
         except Exception as e:
-            avail, note = "error", str(e)[:40]
-        print(f"  {key:<12} {avail:<10} {note}")
+            print(f"  {spec.key:<12} {'error':<10} {str(e)[:40]}")
+            continue
+        avail = "yes" if inst.available() else "no"
+        marker = " <- selected" if inst.name == active else ""
+        print(f"  {spec.key:<12} {avail:<10} {inst.model or inst.name}{marker}")
+        print(f"  {'':<12} {'':<10} models: {', '.join(spec.models)}  (${spec.model_env})")
 
     print("\nLLM")
     print(f"  provider  {cfg.llm.provider}")

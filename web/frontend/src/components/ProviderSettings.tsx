@@ -19,6 +19,81 @@ import { api, errorText, toastError, type ProviderSpec, type Settings } from '@/
 const LLM_PRESETS: Record<string, { base_url: string; model: string }> = {
   deepseek: { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-flash' },
   openai: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  moonshot: { base_url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  zhipu: { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' },
+  qwen: { base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+}
+
+/** Sentinel for "type your own model id" -- Radix rejects empty option values. */
+const CUSTOM = '__custom__'
+
+/**
+ * Model revision picker: a curated list plus "type your own".
+ *
+ * Vendors rev model identifiers constantly (Seedance, Kling and MiniMax all
+ * have done it this year), so a stale dropdown is the single most common
+ * failure here. The custom field is what keeps a new revision usable before
+ * anyone ships a release.
+ */
+function ModelField({
+  spec,
+  value,
+  onValue,
+  t,
+  labelKey = 'providers.model',
+}: {
+  spec: ProviderSpec | null
+  value: string
+  onValue: (v: string) => void
+  t: TFunction
+  labelKey?: string
+}) {
+  const known = spec?.models ?? []
+  // "Custom" is sticky while the user has it open, but it must yield to any
+  // value the parent hands down -- otherwise switching vendors leaves the
+  // picker on "Custom" showing the previous vendor's id.
+  const [pickedCustom, setPickedCustom] = useState(false)
+  const custom = pickedCustom || (!!value && known.length > 0 && !known.includes(value))
+
+  if (!spec || (!known.length && !spec.model_env)) return null
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs">{t(labelKey)}</Label>
+      <Select
+        value={custom ? CUSTOM : value || known[0] || ''}
+        onValueChange={(v) => {
+          if (v === CUSTOM) {
+            setPickedCustom(true)
+            onValue('')
+          } else {
+            setPickedCustom(false)
+            onValue(v)
+          }
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {known.map((m) => (
+            <SelectItem key={m} value={m}>
+              {m}
+            </SelectItem>
+          ))}
+          <SelectItem value={CUSTOM}>{t('providers.modelCustom')}</SelectItem>
+        </SelectContent>
+      </Select>
+      {custom || !known.length ? (
+        <Input
+          value={value}
+          onChange={(e) => onValue(e.target.value)}
+          placeholder={t('providers.modelCustomHint')}
+          spellCheck={false}
+        />
+      ) : null}
+    </div>
+  )
 }
 
 /** Labels and hints live in i18n; the server copy is only a fallback. */
@@ -60,6 +135,7 @@ export function ProviderSettings({
   const [llmModel, setLlmModel] = useState(settings.llm.model)
   const [llmBase, setLlmBase] = useState(settings.llm.base_url)
   const [videoModel, setVideoModel] = useState('')
+  const [voiceModel, setVoiceModel] = useState('')
   const [keys, setKeys] = useState<Record<string, string>>({})
 
   // Re-sync whenever the server sends a fresh snapshot (initial load, save).
@@ -87,15 +163,25 @@ export function ProviderSettings({
     setVideoModel(videoSpec?.model_value || videoSpec?.models[0] || '')
   }, [videoSpec])
 
+  useEffect(() => {
+    // One voice id is shared across vendors in avb.toml, so a value that
+    // does not belong to the vendor now on screen would silently mean
+    // "unknown voice id" at synth time. Fall back to its first known voice.
+    const current = voiceSpec?.model_value || ''
+    const known = voiceSpec?.models ?? []
+    setVoiceModel(known.includes(current) ? current : voiceSpec?.models[0] || '')
+  }, [voiceSpec])
+
   const onPickLlm = (key: string) => {
     setLlmKey(key)
     const other = llmSpecs.filter((s) => s.key !== key)
     const preset = LLM_PRESETS[key]
+    const next = llmSpecs.find((s) => s.key === key)
     // Don't leave the old vendor's model id / endpoint behind.
-    if (other.some((s) => s.models.includes(llmModel)) || !llmModel) {
-      if (preset) setLlmModel(preset.model)
+    if (preset && !(next?.models ?? []).includes(llmModel)) {
+      setLlmModel(preset.model)
     }
-    if (preset && other.some((s) => LLM_PRESETS[s.key]?.base_url === llmBase)) {
+    if (preset && (!llmBase || other.some((s) => LLM_PRESETS[s.key]?.base_url === llmBase))) {
       setLlmBase(preset.base_url)
     }
   }
@@ -111,6 +197,7 @@ export function ProviderSettings({
         llm_model: llmModel.trim() || null,
         llm_base_url: llmBase.trim() || null,
         video_model: videoSpec?.model_env ? videoModel.trim() || null : null,
+        voice_model: voiceSpec?.model_env ? voiceModel.trim() || null : null,
         keys,
       })
       onSaved(fresh)
@@ -211,23 +298,7 @@ export function ProviderSettings({
             )}
           </div>
 
-          {videoSpec && videoSpec.models.length ? (
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t('providers.model')}</Label>
-              <Select value={videoModel} onValueChange={setVideoModel}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {videoSpec.models.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
+          <ModelField key={videoSpec?.key} spec={videoSpec} value={videoModel} onValue={setVideoModel} t={t} />
 
           {envFields(videoSpec)}
         </div>
@@ -255,6 +326,13 @@ export function ProviderSettings({
               <p className="text-xs text-muted-foreground">{vendorNote(t, 'voice', voiceSpec)}</p>
             ) : null}
           </div>
+          <ModelField
+            key={voiceSpec?.key}
+            spec={voiceSpec}
+            value={voiceModel}
+            onValue={setVoiceModel}
+            t={t}
+          />
           {envFields(voiceSpec)}
         </div>
 
@@ -282,10 +360,14 @@ export function ProviderSettings({
               <Label className="text-xs">{t('providers.baseUrl')}</Label>
               <Input value={llmBase} onChange={(e) => setLlmBase(e.target.value)} spellCheck={false} />
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t('providers.modelId')}</Label>
-              <Input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} spellCheck={false} />
-            </div>
+            <ModelField
+              key={llmSpec?.key}
+              spec={llmSpec}
+              value={llmModel}
+              onValue={setLlmModel}
+              t={t}
+              labelKey="providers.modelId"
+            />
           </div>
           {envFields(llmSpec)}
         </div>

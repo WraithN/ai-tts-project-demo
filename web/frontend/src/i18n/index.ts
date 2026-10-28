@@ -17,13 +17,16 @@ void i18n
       zh: { translation: zh },
       en: { translation: en },
     },
-    // Chinese-first: this repo's user base is CN, and every vendor note is
-    // written from a CN-perspective anyway.
-    fallbackLng: 'zh',
+    // English-first: the product targets overseas DTC ads, so the default
+    // experience is English. Chinese is one click away in the header, and an
+    // explicit choice is remembered in localStorage.
+    fallbackLng: 'en',
     supportedLngs: ['zh', 'en'],
     interpolation: { escapeValue: false },
     detection: {
-      order: ['localStorage', 'navigator'],
+      // Deliberately no 'navigator': sniffing the browser would silently
+      // override the default and two users would see different products.
+      order: ['localStorage'],
       caches: ['localStorage'],
       lookupLocalStorage: 'avb.lang',
     },

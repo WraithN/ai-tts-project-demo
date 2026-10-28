@@ -146,11 +146,24 @@ python -m avb.cli web                 # -> http://127.0.0.1:8787
 | **Step 4** | authorize a TikTok account and publish (see limits below) |
 
 Video models are selectable in the UI: **Seedance**, **Kling**, **Jimeng**,
-**Veo**, **Wan**, **Hailuo**, **CogVideoX**. Whichever you pick, it is one
-config change — same `Provider` interface. There is **no offline stand-in**:
-every provider is a hosted model and needs its own key, which you paste into
-the settings page (stored in `.env`). Unconfigured, a run fails loudly rather
-than shipping fake footage.
+**Veo**, **Wan**, **Hailuo (MiniMax)**, **CogVideoX**. Whichever you pick, it
+is one config change — same `Provider` interface. There is **no offline
+stand-in**: every provider is a hosted model and needs its own key, which you
+paste into the settings page (stored in `.env`). Unconfigured, a run fails
+loudly rather than shipping fake footage.
+
+Each vendor also exposes its **model revision** as a dropdown with a
+free-text "custom id" escape hatch (`SEEDANCE_MODEL`, `KLING_MODEL`,
+`MINIMAX_MODEL`, …). Vendors rev these identifiers constantly, so a new
+revision is a settings change, not a release:
+
+```bash
+python -m avb.cli providers     # shows the active model per vendor
+export MINIMAX_MODEL=MiniMax-Hailuo-2.3
+```
+
+The UI is **English by default** (Chinese is one click away in the header);
+the generated voiceover defaults to `en-US-AriaNeural`.
 
 **TikTok caveat**: the Content Posting API forces every post to `SELF_ONLY`
 (private) until your app passes TikTok's Content Posting Audit, which takes

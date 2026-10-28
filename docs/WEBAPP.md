@@ -25,7 +25,7 @@ python -m uvicorn web.server:app --port 8787
 | 样式 | Tailwind CSS 3 + CSS 变量主题（浅/深） |
 | 组件 | shadcn/ui 风格组件（Radix 原语 + CVA），源码在 `src/components/ui/` |
 | 图标 | lucide-react |
-| 多语言 | react-i18next，中/英两套文案，自动检测 + localStorage 记忆 |
+| 多语言 | react-i18next，中/英两套文案；**默认英文**（不嗅探浏览器语言），切换后写入 localStorage |
 | Toast | sonner |
 
 构建产物输出到 `web/static/dist/`，由 FastAPI 直接托管（`/` 与 `/assets`），
@@ -42,6 +42,9 @@ npm run typecheck
 
 改文案只动 `src/i18n/locales/{zh,en}.ts`；加厂商只动
 `avb/provider_specs.py`（服务端）+ 对应语言文件里的 `vendor.*` 键。
+厂商的模型清单同样来自 `provider_specs.py`（`models` / `model_env`），
+设置页自动渲染成下拉框，并保留"自定义模型 id"输入框——厂商改模型名
+（Seedance / Kling / MiniMax 都干过）时不用等发版。
 
 ---
 

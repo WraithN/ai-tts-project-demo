@@ -121,6 +121,7 @@ export const api = {
     llm_model?: string | null
     llm_base_url?: string | null
     video_model?: string | null
+    voice_model?: string | null
     keys?: Record<string, string>
   }) =>
     json<Settings>('/api/settings', {

@@ -137,8 +137,24 @@ pipeline works beats three hours of local inference.
 | `jimeng`/`dreamina` | `JimengVideo` | ✅ adapter implemented, needs `VOLC_ACCESS_KEY` + `VOLC_SECRET_KEY` |
 | `seedance` | `SeedanceVideo` | ✅ adapter implemented, needs `SEEDANCE_API_KEY` |
 | `bailian`/`wan` | `BailianVideo` | ✅ adapter implemented, needs `BAILIAN_API_KEY` |
-| `minimax`/`hailuo` | `MiniMaxVideo` | ✅ adapter implemented, needs `MINIMAX_API_KEY` |
+| `minimax`/`hailuo` | `MiniMaxVideo` | ✅ adapter implemented, needs `MINIMAX_API_KEY` (`MINIMAX_GROUP_ID` on group-billed accounts) |
 | `zhipu`/`cogvideox` | `ZhipuVideo` | ✅ adapter implemented, needs `ZHIPU_API_KEY` |
+
+### Model revisions (every vendor)
+
+Model ids are env vars, so a vendor reving an identifier is a settings
+change rather than a release. The settings page renders each list as a
+dropdown with a free-text "custom id" escape hatch.
+
+| Provider | env var | models offered |
+|---|---|---|
+| seedance | `SEEDANCE_MODEL` | `doubao-seedance-2-0-pro`, `doubao-seedance-2-0-mini`, `doubao-seedance-1-5-pro` |
+| kling | `KLING_MODEL` | `kling-v3`, `kling-v2-5`, `kling-v2-1`, `kling-v1-6` |
+| jimeng | `JIMENG_REQ_KEY` | `jimeng_vgfm_t2v_l20`, `jimeng_vgfm_t2v_l25` |
+| veo | `VEO_MODEL` | `veo-3.1-generate-001`, `veo-3.1-fast-generate-001`, `veo-2.0-generate-001` |
+| bailian | `BAILIAN_MODEL` | `wan2.5-t2v-preview`, `wan2.2-t2v-plus`, `wan2.2-t2v-flash` |
+| minimax | `MINIMAX_MODEL` | `MiniMax-Hailuo-02`, `MiniMax-Hailuo-2.3`, `T2V-01-Director`, `T2V-01` |
+| zhipu | `ZHIPU_MODEL` | `cogvideox-2`, `cogvideox-flash`, `cogvideox` |
 
 All six real adapters share `_AsyncVideoBase` (submit → poll → download)
 and are content-addressed through the same cache. Swapping is:
@@ -206,6 +222,35 @@ python -m avb.cli config set video.max_usd_per_run 1.00
 
 which hard-caps spend on a run.
 
+### MiniMax Hailuo — three steps, not two
+
+Hailuo is the one adapter here that needs an extra hop, and getting it wrong
+fails late and confusingly:
+
+```
+POST /v1/video_generation                 -> {task_id}
+GET  /v1/query/video_generation?task_id=   -> {status, file_id}
+GET  /v1/files/retrieve?file_id=           -> {file: {download_url}}
+```
+
+`files/retrieve` answers **JSON pointing at** the mp4, not the mp4. Handing
+that URL straight to the downloader used to write ~200 bytes of JSON into a
+file named `.mp4`, which then blew up inside ffmpeg several scenes later —
+a failure with no obvious link to its cause. `MiniMaxVideo._poll` now
+resolves the download link itself and only then lets the base class fetch
+bytes.
+
+Two more vendor specifics:
+
+- **Host is region-dependent.** Default is the international endpoint
+  `https://api.minimax.io/v1`; mainland accounts use
+  `https://api.minimaxi.com/v1`. Override with `MINIMAX_BASE_URL`.
+- **duration is 6 or 10, nothing else**, and 1080P caps at 6s. The adapter
+  sends 768P, the one combination that supports both lengths, and asks for
+  6s unless the scene needs more.
+- `MINIMAX_GROUP_ID` is optional; it is sent as the `GroupId` header for
+  group-billed accounts only.
+
 ### What to use for a portfolio case
 
 1. **One keyed provider** (Seedance or Kling) for the whole reel, so every
@@ -227,9 +272,10 @@ asking "but does it actually call a model?"
 |---|---|---|
 | **DeepSeek** | `deepseek-flash` / `deepseek-v4-pro` | default here. V4 is a reasoning family — budget `max_tokens` accordingly and prefer `effort = "low"` for edit routing |
 | OpenAI | `gpt-4o-mini` / `gpt-4.1` | the safe fallback everyone knows |
-| Moonshot | `moonshot-v1-8k` | good Chinese |
-| Zhipu | `glm-4-plus` | domestic |
-| Ollama/vLLM | anything | fully local, `--jinja` for JSON |
+| Moonshot | `moonshot-v1-8k` / `kimi-k2` | good Chinese copy |
+| Zhipu | `glm-4.6` / `glm-4.5-air` | domestic; shares `ZHIPU_API_KEY` with the video adapter |
+| Qwen (Bailian) | `qwen-plus` / `qwen-max` | shares `BAILIAN_API_KEY` with the Wan video adapter |
+| Ollama/vLLM | anything | pick `compat` and type the base URL yourself |
 
 Cost for the workloads here (script parse + edit routing): fractions of a
 cent per call on DeepSeek. Not a factor. Latency and JSON reliability are,
@@ -244,3 +290,4 @@ exists.
 |---|---|
 | 2026-10 | initial survey; edge-tts adopted as default voice; domestic video adapters written (Kling / Bailian / MiniMax / Zhipu) alongside Veo |
 | 2026-10 | Jimeng (即梦) adapter added — Volcengine AK/SK HMAC-SHA256 signing implemented inline, `req_key` overridable |
+| 2026-10 | model ids externalised per vendor (`*_MODEL` env vars + picker in the settings page); MiniMax retrieval fixed (`file_id` → `files/retrieve` → `download_url`) |

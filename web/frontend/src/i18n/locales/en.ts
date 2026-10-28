@@ -32,6 +32,8 @@ const en: typeof zh = {
     publish: 'Publish to TikTok',
     publishHint: 'Apps that have not passed the Content Posting Audit can only post SELF_ONLY.',
     model: 'Model revision',
+    modelCustom: 'Custom model id…',
+    modelCustomHint: 'e.g. MiniMax-Hailuo-2.3 — vendors rev these often',
     baseUrl: 'Base URL',
     modelId: 'Model',
     save: 'Save settings',
@@ -69,11 +71,11 @@ const en: typeof zh = {
     },
     bailian: {
       label: 'Wan (Alibaba Bailian)',
-      note: 'Cheap China option, average latency.',
+      note: 'Cheap China option, average latency. The only major family with open weights.',
     },
     minimax: {
       label: 'Hailuo (MiniMax)',
-      note: 'Strong on people — good for talking head.',
+      note: 'Strong on people and physics. Default host is the intl endpoint — set MINIMAX_BASE_URL for a mainland account.',
     },
     zhipu: {
       label: 'CogVideoX (Zhipu)',
@@ -82,7 +84,7 @@ const en: typeof zh = {
   },
 
   voiceVendor: {
-    edge: { label: 'Edge TTS (free neural)', note: 'edge-tts, no key needed, word-level timings.' },
+    edge: { label: 'Edge TTS (free neural)', note: 'edge-tts, no key needed, word-level timings. ~400 voices.' },
     elevenlabs: { label: 'ElevenLabs (paid)', note: 'Most accurate word timings, billed per character.' },
     formant: { label: 'Formant (offline)', note: 'Offline Klatt synthesiser. Real audio, robotic.' },
     auto: 'Auto (ElevenLabs → Edge → offline)',
@@ -90,7 +92,11 @@ const en: typeof zh = {
 
   llmVendor: {
     deepseek: { label: 'DeepSeek (default)', note: 'OpenAI-compatible endpoint for parsing and edit routing.' },
-    openai: { label: 'OpenAI-compatible endpoint', note: 'Point Base URL at any OpenAI-compatible service.' },
+    openai: { label: 'OpenAI', note: 'gpt-4o-mini is plenty for scene parsing.' },
+    moonshot: { label: 'Moonshot / Kimi', note: 'Strong Chinese copy; OpenAI-compatible endpoint.' },
+    zhipu: { label: 'Zhipu GLM', note: 'Shares ZHIPU_API_KEY with the CogVideoX video adapter.' },
+    qwen: { label: 'Qwen (Alibaba Bailian)', note: 'Shares BAILIAN_API_KEY with the Wan video adapter.' },
+    compat: { label: 'OpenAI-compatible (custom)', note: 'Point Base URL at vLLM / Ollama / any gateway.' },
   },
 
   env: {
@@ -101,11 +107,13 @@ const en: typeof zh = {
     JIMENG_REQ_KEY: { label: 'req_key', hint: 'Usually leave alone; set it to switch model revisions' },
     GOOGLE_API_KEY: { label: 'API Key', hint: 'Google AI Studio / Vertex, Veo access required' },
     BAILIAN_API_KEY: { label: 'DashScope API Key', hint: 'Alibaba Bailian console → API-KEY' },
-    MINIMAX_API_KEY: { label: 'API Key', hint: 'MiniMax platform → API key' },
+    MINIMAX_API_KEY: { label: 'API Key', hint: 'MiniMax platform → Account management → API Keys' },
+    MINIMAX_GROUP_ID: { label: 'Group ID', hint: 'Only for group-billed accounts; sent as the GroupId header' },
     ZHIPU_API_KEY: { label: 'API Key', hint: 'Zhipu open platform → API Keys' },
     ELEVENLABS_API_KEY: { label: 'API Key', hint: 'ElevenLabs → Profile → API Key' },
     DEEPSEEK_API_KEY: { label: 'API Key', hint: 'platform.deepseek.com → API Keys' },
-    OPENAI_API_KEY: { label: 'API Key', hint: 'OpenAI / Moonshot / vLLM / Ollama all work' },
+    MOONSHOT_API_KEY: { label: 'API Key', hint: 'platform.moonshot.cn → API keys' },
+    OPENAI_API_KEY: { label: 'API Key', hint: 'OpenAI, or any OpenAI-compatible gateway' },
     TIKTOK_CLIENT_KEY: { label: 'Client Key', hint: 'TikTok developer portal → App → Client Key' },
     TIKTOK_CLIENT_SECRET: { label: 'Client Secret', hint: 'Same place — never commit it' },
     TIKTOK_REDIRECT_URI: { label: 'Redirect URI', hint: 'Must match the callback registered in the portal' },

@@ -161,6 +161,7 @@ class SettingsUpdate(BaseModel):
     llm_model: str | None = None
     llm_base_url: str | None = None
     video_model: str | None = None
+    voice_model: str | None = None
     keys: dict[str, str] = {}
 
 
@@ -244,12 +245,30 @@ _LLM_PRESETS = {
                  "api_key_env": "DEEPSEEK_API_KEY"},
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini",
                "api_key_env": "OPENAI_API_KEY"},
+    "moonshot": {"base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k",
+                 "api_key_env": "MOONSHOT_API_KEY"},
+    "zhipu": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.6",
+               "api_key_env": "ZHIPU_API_KEY"},
+    "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus",
+             "api_key_env": "BAILIAN_API_KEY"},
+    # "compat" deliberately has no preset: the whole point is that the user
+    # types the base URL, so auto-filling it would defeat the field.
 }
 
 
-def _spec_payload(specs, selected: str | None = None):
+def _spec_payload(specs, selected: str | None = None, model_values: dict[str, str] | None = None):
+    """Serialize specs for the settings page.
+
+    `model_values` overrides the current model per spec key, for values that
+    live somewhere other than the spec's env var (the LLM model lives in
+    avb.toml, for instance).
+    """
     out = []
     for s in specs:
+        if model_values and s.key in model_values:
+            current = model_values[s.key] or ""
+        else:
+            current = os.environ.get(s.model_env, "") if s.model_env else ""
         out.append({
             "key": s.key,
             "label": s.label,
@@ -260,7 +279,7 @@ def _spec_payload(specs, selected: str | None = None):
             "notes": s.notes,
             "models": list(s.models),
             "model_env": s.model_env,
-            "model_value": os.environ.get(s.model_env, "") if s.model_env else "",
+            "model_value": current,
             "envs": env_status(s),
             "selected": selected == s.key,
         })
@@ -309,7 +328,12 @@ async def get_settings():
             "resolved": voice.name.replace("-tts", "") if voice else "auto",
             "active": voice.name,
             "ready": voice.available(),
-            "specs": _spec_payload(VOICE_SPECS, cfg.voice.provider),
+            "specs": _spec_payload(
+                VOICE_SPECS, cfg.voice.provider,
+                # The chosen voice is a config value (voice.voice), not an
+                # env var, so hand it to the UI explicitly.
+                {s.key: cfg.voice.voice for s in VOICE_SPECS if s.model_env},
+            ),
         },
         "llm": {
             "selected": cfg.llm.provider,
@@ -318,7 +342,9 @@ async def get_settings():
             "api_key_env": cfg.llm.api_key_env,
             "api_key_set": bool(cfg.llm.api_key),
             "api_key_masked": mask(cfg.llm.api_key),
-            "specs": _spec_payload(LLM_SPECS, cfg.llm.provider),
+            "specs": _spec_payload(
+                LLM_SPECS, cfg.llm.provider, {s.key: cfg.llm.model for s in LLM_SPECS}
+            ),
         },
         "publish": {"specs": _spec_payload(PUBLISH_SPECS, "tiktok")},
         "env_file": str(env_path()),
@@ -373,11 +399,20 @@ async def update_settings(req: SettingsUpdate):
         secrets[k] = v
 
     if req.video_model:
-        # per-provider model override, e.g. SEEDANCE_MODEL
+        # per-provider model override, e.g. SEEDANCE_MODEL / MINIMAX_MODEL
         sel = (req.video_provider or load_config().video.provider or "").lower()
         spec = spec_for("video", sel)
         if spec and spec.model_env:
             secrets[spec.model_env] = req.video_model.strip()
+
+    if req.voice_model:
+        # AVB_VOICE is the one env var the voice adapters read for the voice
+        # id; it also mirrors [voice].voice in avb.toml.
+        sel = (req.voice_provider or load_config().voice.provider or "").lower()
+        spec = spec_for("voice", sel)
+        env_name = (spec.model_env if spec and spec.model_env else "AVB_VOICE")
+        if req.voice_model.strip():
+            secrets[env_name] = req.voice_model.strip()
 
     if secrets:
         write_env(secrets)

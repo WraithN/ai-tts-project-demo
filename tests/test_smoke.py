@@ -224,6 +224,64 @@ def test_video_provider_explicit_but_unconfigured(monkeypatch):
     assert v.name != "veo"
 
 
+def test_every_video_advertises_switchable_models(monkeypatch):
+    """A vendor rev'ing a model id must be a settings change, not a release.
+
+    So: every spec lists models, the adapter's default is the first one, and
+    the env override actually reaches the request payload.
+    """
+    from avb.assets.video import _REGISTRY
+    from avb.provider_specs import VIDEO_SPECS
+
+    for spec in VIDEO_SPECS:
+        cls = _REGISTRY[spec.key]
+        assert cls.model_env == spec.model_env, f"{spec.key}: {cls.model_env} != {spec.model_env}"
+        assert spec.models, f"{spec.key} lists no models"
+        assert cls().default_model == spec.models[0], f"{spec.key} default drifts from its spec"
+
+    monkeypatch.setenv("MINIMAX_MODEL", "T2V-01-Director")
+    assert _REGISTRY["minimax"]().model == "T2V-01-Director"
+
+    monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
+    assert _REGISTRY["minimax"]().base == "https://api.minimaxi.com/v1"
+
+
+def test_minimax_poll_resolves_download_url(monkeypatch):
+    """file_id -> files/retrieve -> {file:{download_url}}.
+
+    The retrieve endpoint answers *JSON pointing at* the mp4. Returning its
+    URL directly used to make the downloader write ~200 bytes of JSON with an
+    .mp4 name, which only blew up later inside ffmpeg.
+    """
+    import avb.assets.video as vmod
+    from avb.assets.video import MiniMaxVideo
+
+    seen: list[str] = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **_kw):
+        seen.append(url)
+        if "query/video_generation" in url:
+            return _Resp({"status": "Success", "file_id": "998877"})
+        return _Resp({"file": {"download_url": "https://cdn.example/clip.mp4"}})
+
+    monkeypatch.setattr(vmod.requests, "get", fake_get)
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-test")
+    v = MiniMaxVideo()
+
+    assert v._poll("task-1") == "https://cdn.example/clip.mp4"
+    assert any("files/retrieve?file_id=998877" in u for u in seen)
+
+
 def test_write_env_preserves_comments(tmp_path):
     from avb.config import write_env
 
