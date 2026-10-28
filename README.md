@@ -140,17 +140,25 @@ python -m avb.cli web                 # -> http://127.0.0.1:8787
 
 | | |
 |---|---|
-| **Step 1** | paste the script, pick style / aspect / video model / voice |
-| **Step 2** | generate; watch progress; preview the finished 9:16 cut |
-| **Step 3** | chat to revise (`make the hook punchier`) — see which scenes it targets |
-| **Step 4** | authorize a TikTok account and publish (see limits below) |
+| **Step 1** | fill the product brief (name + selling points + style) → get **four** ad-script concepts (Pain→Solution / Grass-planting / Review / Story); pick one and edit it |
+| **Step 2** | storyboard appears with **cinematography per scene** (shot, angle, elements) — edit the copy, the visual prompt, or the camera; nothing renders yet |
+| **Step 3** | confirm → render; watch progress; preview the finished 9:16 cut |
+| **Step 4** | chat to revise (`make the hook punchier`) — see which scenes it targets, only those re-render |
+| **Step 5** | authorize a TikTok account and publish (see limits below) |
+
+Step 1 replaces the old free-text script box. The brief is turned into four
+*competing* frameworks by `avb/brief.py` (LLM when a key is set, deterministic
+templates offline). Step 2's scene view is no longer a flat copy-split: every
+shot carries a `shot`, `angle`, and `elements` description, and the composed
+image/video prompt weaves them together (see `avb/parse.py`).
 
 Video models are selectable in the UI: **Seedance**, **Kling**, **Jimeng**,
-**Veo**, **Wan**, **Hailuo (MiniMax)**, **CogVideoX**. Whichever you pick, it
-is one config change — same `Provider` interface. There is **no offline
-stand-in**: every provider is a hosted model and needs its own key, which you
-paste into the settings page (stored in `.env`). Unconfigured, a run fails
-loudly rather than shipping fake footage.
+**Veo**, **Wan**, **Hailuo (MiniMax)** — including the **H3 / H3-Highspeed /
+H3-Lite** tiers — **CogVideoX**. Whichever you pick, it is one config change —
+same `Provider` interface. There is **no offline stand-in**: every provider is
+a hosted model and needs its own key, which you paste into the settings page
+(stored in `.env`). Unconfigured, a run fails loudly rather than shipping fake
+footage.
 
 Each vendor also exposes its **model revision** as a dropdown with a
 free-text "custom id" escape hatch (`SEEDANCE_MODEL`, `KLING_MODEL`,

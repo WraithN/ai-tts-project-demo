@@ -57,7 +57,7 @@ energy = 1.0
 #   minimax  -> MiniMax Hailuo (MINIMAX_API_KEY)
 #   zhipu    -> Zhipu CogVideoX (ZHIPU_API_KEY)
 #   auto     -> first one that has a key, in the order listed above
-provider = "seedance"
+provider = "minimax"
 model = ""
 clip_seconds = 5.0
 # Hard spend ceiling per run, USD. 0 disables the guard.

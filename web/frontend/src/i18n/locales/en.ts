@@ -168,6 +168,34 @@ const en: typeof zh = {
     submitting: 'Generating…',
   },
 
+  brief: {
+    title: 'Product brief → ad scripts',
+    product: 'Product',
+    productPlaceholder: 'e.g. Lumo sleep lamp',
+    points: 'Selling points',
+    pointsPlaceholder: 'One per line:\nfalls asleep 2x faster\nwarm sunrise wake-up light',
+    style: 'Visual style',
+    tone: 'Tone (optional)',
+    tonePlaceholder: 'e.g. reassuring, premium, playful',
+    audience: 'Audience (optional)',
+    audiencePlaceholder: 'e.g. new parents, night-shift workers',
+    useLlm: 'LLM script writer',
+    useLlmHint: 'Off = deterministic templates (works offline). On = richer, varied copy.',
+    generate: 'Generate 4 ad scripts',
+    generating: 'Writing…',
+    choose: 'Pick one and edit it — then send to storyboard',
+    toScenes: 'Next: storyboard',
+    planning: 'Planning…',
+    needInput: 'Enter a product name or at least one selling point',
+  },
+
+  scriptType: {
+    pain_solution: 'Pain → Solution',
+    grass_planting: 'Grass-planting / Soft sell',
+    review_proof: 'Review / Proof',
+    story_drama: 'Story / Drama',
+  },
+
   confirm: {
     title: 'Confirm scene copy and captions',
     subtitle:
@@ -177,6 +205,9 @@ const en: typeof zh = {
     captionNote:
       'Captions are driven by this line’s word-level timings, so editing it moves the caption too.',
     prompt: 'Visual prompt',
+    shot: 'Shot',
+    angle: 'Angle',
+    elements: 'Elements (comma separated)',
     back: 'Back to script',
     reparse: 'Re-plan',
     confirm: 'Confirm and render',

@@ -35,8 +35,17 @@ export function SceneConfirm({
   // Re-seed when a fresh plan arrives (re-parse, or a new script).
   useEffect(() => setDraft(scenes), [scenes])
 
-  const patch = (id: string, key: 'vo' | 'prompt', value: string) =>
+  const patch = (id: string, key: 'vo' | 'prompt' | 'shot' | 'angle', value: string) =>
     setDraft((v) => v.map((s) => (s.id === id ? { ...s, [key]: value } : s)))
+
+  const patchElements = (id: string, raw: string) =>
+    setDraft((v) =>
+      v.map((s) =>
+        s.id === id
+          ? { ...s, elements: raw.split(',').map((x) => x.trim()).filter(Boolean) }
+          : s,
+      ),
+    )
 
   const remove = (id: string) => setDraft((v) => v.filter((s) => s.id !== id))
   const move = (id: string, dir: -1 | 1) =>
@@ -137,6 +146,38 @@ export function SceneConfirm({
                     onChange={(e) => patch(s.id, 'prompt', e.target.value)}
                   />
                 </div>
+
+                <details className="group rounded-md border border-dashed border-muted-foreground/30 px-2 py-1.5">
+                  <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                    {t('confirm.shot')} · {t('confirm.angle')} · {t('confirm.elements')}
+                  </summary>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">{t('confirm.shot')}</Label>
+                      <input
+                        className="h-7 w-full rounded border bg-background px-2 text-xs"
+                        value={s.shot}
+                        onChange={(e) => patch(s.id, 'shot', e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">{t('confirm.angle')}</Label>
+                      <input
+                        className="h-7 w-full rounded border bg-background px-2 text-xs"
+                        value={s.angle}
+                        onChange={(e) => patch(s.id, 'angle', e.target.value)}
+                      />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">{t('confirm.elements')}</Label>
+                      <input
+                        className="h-7 w-full rounded border bg-background px-2 text-xs"
+                        value={(s.elements || []).join(', ')}
+                        onChange={(e) => patchElements(s.id, e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
           ))}

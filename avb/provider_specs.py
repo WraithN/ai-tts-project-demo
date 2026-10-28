@@ -117,10 +117,14 @@ VIDEO_SPECS: tuple[ProviderSpec, ...] = (
                     hint="Only needed on group-billed accounts; sent as the GroupId header"),
         ),
         # The first entry is what the adapter defaults to.
-        models=("MiniMax-Hailuo-02", "MiniMax-Hailuo-2.3", "T2V-01-Director", "T2V-01"),
+        models=(
+            "MiniMax-Hailuo-02", "MiniMax-Hailuo-2.3", "T2V-01-Director", "T2V-01",
+            # H3 series (2026): quality-first / high-speed / lite tiers
+            "MiniMax-H3", "MiniMax-H3-Highspeed", "MiniMax-H3-Lite",
+        ),
         model_env="MINIMAX_MODEL",
         console="https://platform.minimax.io",
-        notes="Strong on people and physics. Default host is the intl endpoint api.minimax.io — set MINIMAX_BASE_URL to https://api.minimaxi.com/v1 for a mainland account.",
+        notes="Strong on people and physics. Default host is the intl endpoint api.minimax.io — set MINIMAX_BASE_URL to https://api.minimaxi.com/v1 for a mainland account. H3 tiers: H3 (quality), H3-Highspeed (balanced), H3-Lite (cheap/batch).",
         aliases=("hailuo",),
     ),
     ProviderSpec(

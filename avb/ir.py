@@ -59,6 +59,15 @@ class Visual:
     style: str = "dr_vsl"
     seed: int = 0
     palette: list[str] | None = None
+    # --- cinematography (authored by the planner, editable in the UI) -----
+    # These three are the "shot description" the user asked for: what the
+    # camera does (shot), where it sits (angle), and what is in frame
+    # (elements). `prompt` is the composed image/video-generation string;
+    # these are kept separately so the UI can show and edit them on their
+    # own and recompose `prompt` without losing the structure.
+    shot: str = ""  # e.g. "close-up", "wide tracking", "over-the-shoulder"
+    angle: str = ""  # e.g. "eye-level", "low-angle", "top-down", "dutch"
+    elements: list[str] | None = None  # on-screen subjects / props
 
     def semantic(self) -> dict[str, Any]:
         return {
@@ -68,6 +77,9 @@ class Visual:
             "style": self.style,
             "seed": self.seed,
             "palette": self.palette,
+            "shot": self.shot,
+            "angle": self.angle,
+            "elements": self.elements,
         }
 
 
@@ -255,7 +267,18 @@ class Project:
         scenes: list[Scene] = []
         for i, s in enumerate(d.get("scenes", [])):
             vo = Voiceover(**(s.get("vo") or {}))
-            vis = Visual(**(s.get("visual") or {}))
+            vis_raw = s.get("visual") or {}
+            vis = Visual(
+                prompt=vis_raw.get("prompt", ""),
+                kind=vis_raw.get("kind", "still"),
+                motion=vis_raw.get("motion", "zoom_in"),
+                style=vis_raw.get("style", "dr_vsl"),
+                seed=vis_raw.get("seed", 0),
+                palette=vis_raw.get("palette"),
+                shot=vis_raw.get("shot", ""),
+                angle=vis_raw.get("angle", ""),
+                elements=vis_raw.get("elements"),
+            )
             cap = CaptionStyle(**(s.get("caption") or {}))
             scenes.append(
                 Scene(

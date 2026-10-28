@@ -28,6 +28,7 @@ from avb.config import (
     write_env, save_config,
 )
 from avb.parse import parse_script, parse_script_llm
+from avb.brief import generate_scripts
 from avb.pipeline import Pipeline
 from avb.edit import apply_plan
 from avb.llm_edit import plan_edit_llm
@@ -483,12 +484,52 @@ class PlanRequest(BaseModel):
     use_llm: bool = True
 
 
+class ScriptsRequest(BaseModel):
+    """Product brief -> four competing ad-script concepts."""
+
+    product: str = ""
+    selling_points: list[str] | str | None = None
+    style: str = "dr_vsl"
+    audience: str | None = None
+    tone: str | None = None
+    use_llm: bool = True
+
+
+@app.post("/api/scripts")
+async def create_scripts(req: ScriptsRequest):
+    """Brief -> up to four ad-script variants. Free; no generation yet."""
+    product = (req.product or "").strip()
+    if not product and not req.selling_points:
+        raise HTTPException(400, "请至少填写产品名称或卖点")
+    try:
+        drafts = generate_scripts(
+            product=product,
+            selling_points=req.selling_points,
+            style=req.style,
+            audience=req.audience,
+            tone=req.tone,
+            use_llm=req.use_llm,
+        )
+    except Exception as e:  # LLM path falls back internally; surface plainly
+        raise HTTPException(500, f"脚本生成失败：{e}") from e
+    return {
+        "brief": {
+            "product": product,
+            "style": req.style,
+        },
+        "scripts": [d.to_dict() for d in drafts],
+    }
+
+
 class PlanScene(BaseModel):
     """A user-confirmed (or user-edited) scene, sent back on render."""
 
     id: str
     vo: str | None = None
     prompt: str | None = None
+    shot: str | None = None
+    angle: str | None = None
+    elements: list[str] | None = None
 
 
 class RenderRequest(BaseModel):
@@ -520,6 +561,9 @@ def _scene_view(scene: object) -> dict:
         "prompt": scene.visual.prompt,
         "motion": scene.visual.motion,
         "style": scene.visual.style or "",
+        "shot": scene.visual.shot or "",
+        "angle": scene.visual.angle or "",
+        "elements": scene.visual.elements or [],
     }
 
 
@@ -531,14 +575,35 @@ def _apply_scene_overrides(project: object, overrides: list[dict]) -> int:
         scene = by_id.get(getattr(ov, "id", None) or (ov or {}).get("id"))
         if scene is None:
             continue
-        vo = getattr(ov, "vo", None) if hasattr(ov, "vo") else (ov or {}).get("vo")
-        prompt = getattr(ov, "prompt", None) if hasattr(ov, "prompt") else (ov or {}).get("prompt")
+        ovd = ov if isinstance(ov, dict) else {
+            "vo": getattr(ov, "vo", None),
+            "prompt": getattr(ov, "prompt", None),
+            "shot": getattr(ov, "shot", None),
+            "angle": getattr(ov, "angle", None),
+            "elements": getattr(ov, "elements", None),
+        }
+        vo = ovd.get("vo")
+        prompt = ovd.get("prompt")
+        shot = ovd.get("shot")
+        angle = ovd.get("angle")
+        elements = ovd.get("elements")
         if vo is not None and vo != scene.vo.text:
             scene.vo.text = vo
             changed += 1
         if prompt is not None and prompt != scene.visual.prompt:
             scene.visual.prompt = prompt
             changed += 1
+        if shot is not None and shot != scene.visual.shot:
+            scene.visual.shot = shot
+            changed += 1
+        if angle is not None and angle != scene.visual.angle:
+            scene.visual.angle = angle
+            changed += 1
+        if elements is not None:
+            el = list(elements) if isinstance(elements, (list, tuple)) else None
+            if el != (scene.visual.elements or []):
+                scene.visual.elements = el
+                changed += 1
     return changed
 
 

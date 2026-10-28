@@ -216,6 +216,27 @@ STYLES: dict[str, StyleSpec] = {
         overlays=["lower_third"],
         palette=["#0B1B2B", "#4CC9F0", "#FFFFFF", "#F0F4F8"],
     ),
+    "cinematic": StyleSpec(
+        name="cinematic",
+        label="Cinematic",
+        font_key="segoeuib",
+        font_scale=0.060,
+        uppercase=False,
+        caption_mode="kinetic",
+        caption_position="bottom",
+        text_color="#F5F5F7",
+        stroke_color="#000000",
+        stroke_width=13,
+        highlight="#E8C37A",
+        line_gap=20,
+        default_motion="zoom_in",
+        shot_len=(2.4, 4.2),
+        interrupt_bias=0.35,
+        transition="dissolve",
+        bg_style="photo",
+        overlays=["vignette", "subtle_grain", "letterbox"],
+        palette=["#0B0B0F", "#E8C37A", "#F5F5F7", "#7A5C3E"],
+    ),
 }
 
 DEFAULT_STYLE = "dr_vsl"

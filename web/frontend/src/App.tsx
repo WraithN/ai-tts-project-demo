@@ -5,6 +5,7 @@ import { AlertTriangle, Settings as SettingsIcon, Sparkles } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { ProviderSettings } from '@/components/ProviderSettings'
 import { ScriptPanel, type GeneratePayload } from '@/components/ScriptPanel'
+import { BriefPanel } from '@/components/BriefPanel'
 import { SceneConfirm } from '@/components/SceneConfirm'
 import { Stepper, type StepId } from '@/components/Stepper'
 import { StatusCard } from '@/components/StatusCard'
@@ -93,7 +94,14 @@ export default function App() {
     try {
       const r = await api.render({
         plan_id: plan.plan_id,
-        scenes: scenes.map((s) => ({ id: s.id, vo: s.vo, prompt: s.prompt })),
+        scenes: scenes.map((s) => ({
+          id: s.id,
+          vo: s.vo,
+          prompt: s.prompt,
+          shot: s.shot,
+          angle: s.angle,
+          elements: s.elements,
+        })),
         name: plan.name,
         style: plan.style,
         aspect: p?.aspect ?? '9:16',
@@ -217,10 +225,9 @@ export default function App() {
               <div className="space-y-5">
                 {step === 'script' || !settings ? (
                   settings ? (
-                    <ScriptPanel
+                    <BriefPanel
                       settings={settings}
-                      running={planBusy}
-                      job={null}
+                      planBusy={planBusy}
                       onPlan={makePlan}
                     />
                   ) : (

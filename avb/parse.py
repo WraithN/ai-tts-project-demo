@@ -172,8 +172,57 @@ _BEAT_PROMPT: dict[Beat, str] = {
     "cta": "bold minimal product shot, {kw}",
 }
 
+# Cinematography tables. These are what turn a flat copy-split into an actual
+# shot list: every beat gets a default camera move, vantage point, and the
+# on-screen elements the renderer should put in frame.
+_BEAT_SHOT: dict[Beat, str] = {
+    "hook": "extreme close-up",
+    "problem": "medium shot",
+    "agitate": "handheld tracking shot",
+    "mechanism": "macro insert",
+    "proof": "graphic overlay",
+    "offer": "product hero shot",
+    "cta": "wide hero reveal",
+}
+
+_BEAT_ANGLE: dict[Beat, str] = {
+    "hook": "eye-level, slight dutch tilt",
+    "problem": "eye-level",
+    "agitate": "low-angle handheld",
+    "mechanism": "top-down macro",
+    "proof": "straight-on",
+    "offer": "slight low-angle",
+    "cta": "eye-level",
+}
+
+_BEAT_SUBJECT: dict[Beat, str] = {
+    "hook": "the product in hand",
+    "problem": "a tired person at home",
+    "agitate": "a frustrated person mid-routine",
+    "mechanism": "the formula / active ingredient",
+    "proof": "the results on screen",
+    "offer": "the product on a clean surface",
+    "cta": "the product, branded",
+}
+
+# Per-style look notes woven into every prompt so the model knows the
+# rendering language even when the user just picked a style name.
+_STYLE_NOTE: dict[str, str] = {
+    "dr_vsl": "high-contrast commercial look, shallow depth of field",
+    "cinematic": "cinematic lighting, film grain, anamorphic flare",
+    "comic": "bold comic-book shading, halftone, thick outlines",
+    "vector": "flat vector illustration, clean shapes, no shadows",
+    "claymation": "claymation texture, soft pastel lighting",
+    "ugc": "selfie camera, natural window light, slightly shaky",
+    "talking_head": "studio portrait, soft key light, shallow bokeh",
+}
+
 
 def keywords(text: str, limit: int = 4) -> str:
+    return ", ".join(keywords_list(text, limit)) if keywords_list(text, limit) else "abstract texture"
+
+
+def keywords_list(text: str, limit: int = 4) -> list[str]:
     words = re.findall(r"[A-Za-z][A-Za-z\-']+", text)
     seen: list[str] = []
     for w in words:
@@ -183,11 +232,41 @@ def keywords(text: str, limit: int = 4) -> str:
         seen.append(lw)
         if len(seen) >= limit:
             break
-    return ", ".join(seen) if seen else "abstract texture"
+    return seen
 
 
 def build_visual_prompt(text: str, beat: Beat, style: str) -> str:
     return _BEAT_PROMPT.get(beat, "{kw}").format(kw=keywords(text))
+
+
+def cinematography_for(beat: Beat, style: str, text: str) -> tuple[str, str, list[str]]:
+    """Default shot / angle / elements for a beat, before any LLM override."""
+    shot = _BEAT_SHOT.get(beat, "medium shot")
+    angle = _BEAT_ANGLE.get(beat, "eye-level")
+    kw = keywords_list(text, limit=3)
+    elements = [_BEAT_SUBJECT.get(beat, "the product"), *kw]
+    return shot, angle, elements
+
+
+def compose_visual_prompt(
+    text: str, beat: Beat, style: str, shot: str = "", angle: str = "", elements: list[str] | None = None
+) -> str:
+    """The full image/video-generation prompt.
+
+    Composed from the cinematography fields so they are never lost, plus a
+    per-style look note. When an LLM supplies a complete `visual` string we
+    keep that instead (see _project_from_shots).
+    """
+    shot = shot or _BEAT_SHOT.get(beat, "medium shot")
+    angle = angle or _BEAT_ANGLE.get(beat, "eye-level")
+    el = ", ".join(elements) if elements else keywords(text)
+    look = _STYLE_NOTE.get(style, "")
+    kw = keywords(text)
+    parts = [shot, angle, el]
+    if look:
+        parts.append(look)
+    parts.append(kw)
+    return ", ".join(p for p in parts if p)
 
 
 # --------------------------------------------------------------------------
@@ -281,6 +360,7 @@ def parse_script(
         # Hooks and proof points punch harder; explanations breathe.
         interrupt = min(1.0, spec.interrupt_bias + (0.2 if beat == "hook" else 0.0))
         energy = 1.0 if beat in ("hook", "cta", "offer") else 0.78
+        shot, angle, elements = cinematography_for(beat, style, text)
 
         scenes.append(
             Scene(
@@ -289,12 +369,15 @@ def parse_script(
                 beat=beat,
                 vo=Voiceover(text=text, voice="adam", speed=1.0, energy=energy),
                 visual=Visual(
-                    prompt=build_visual_prompt(text, beat, style),
+                    prompt=compose_visual_prompt(text, beat, style, shot, angle, elements),
                     kind=visual_kind_for(style, beat),
                     motion=motion_for(style, beat),
                     style=style,
                     seed=(hash(text) & 0xFFFF),
                     palette=spec.palette,
+                    shot=shot,
+                    angle=angle,
+                    elements=elements,
                 ),
                 caption=CaptionStyle(
                     mode=spec.caption_mode,
@@ -317,18 +400,22 @@ def parse_script(
 # LLM path
 # --------------------------------------------------------------------------
 
-_LLM_SYSTEM = """You are a direct-response video producer. Convert an ad script into a shot list.
+_LLM_SYSTEM = """You are a direct-response video director. Convert an ad script into a shot list.
 
 Return ONLY a JSON array. One object per shot:
   {"text": "<the exact spoken words for this shot, 4-18 words>",
    "beat": "hook|problem|agitate|mechanism|proof|offer|cta",
-   "visual": "<a concrete image/video generation prompt, 8-20 words>"}
+   "shot": "<camera framing, e.g. 'close-up', 'wide tracking', 'over-the-shoulder'>",
+   "angle": "<camera vantage, e.g. 'eye-level', 'low-angle', 'top-down', 'dutch'>",
+   "elements": ["<subject in frame>", "<key prop>", "..."],
+   "visual": "<a concrete image/video generation prompt, 12-25 words, weaving shot+angle+elements>"}
 
 Rules:
 - Preserve the script's wording. Split only, never rewrite.
-- A shot should be 1.5-3 seconds of speech.
-- Never exceed 18 words of speech per shot.
-- The visual prompt must describe a specific, filmable image."""
+- A shot should be 1.5-3 seconds of speech. Never exceed 18 words of speech.
+- Give every shot a distinct shot and angle, not the same framing each time.
+- elements is a list of 2-4 concrete, filmable things that must appear in frame.
+- The visual prompt must describe a specific, filmable image that an AI video model can render."""
 
 
 def _llm_call(script: str, model: str, base_url: str, api_key: str) -> str:
@@ -447,6 +534,12 @@ def _project_from_shots(script: str, shots: list, **kwargs) -> Project:
         if beat not in ("hook", "problem", "agitate", "mechanism", "proof", "offer", "cta"):
             beat = "problem"
         prompt = str(sh.get("visual") or "").strip() or build_visual_prompt(text, beat, kwargs["style"])
+        shot = str(sh.get("shot") or "").strip() or _BEAT_SHOT.get(beat, "medium shot")
+        angle = str(sh.get("angle") or "").strip() or _BEAT_ANGLE.get(beat, "eye-level")
+        raw_elements = sh.get("elements") or []
+        elements = [str(e).strip() for e in raw_elements if str(e).strip()] or None
+        if not prompt or prompt == build_visual_prompt(text, beat, kwargs["style"]):
+            prompt = compose_visual_prompt(text, beat, kwargs["style"], shot, angle, elements)
         interrupt = min(1.0, spec.interrupt_bias + (0.2 if beat == "hook" else 0.0))
         scenes.append(
             Scene(
@@ -461,6 +554,9 @@ def _project_from_shots(script: str, shots: list, **kwargs) -> Project:
                     style=kwargs["style"],
                     seed=(hash(text) & 0xFFFF),
                     palette=spec.palette,
+                    shot=shot,
+                    angle=angle,
+                    elements=elements,
                 ),
                 caption=CaptionStyle(
                     mode=spec.caption_mode,

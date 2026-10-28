@@ -77,6 +77,22 @@ export interface PlanScene {
   prompt: string
   motion: string
   style: string
+  shot: string
+  angle: string
+  elements: string[]
+}
+
+export interface ScriptDraft {
+  type: string
+  title: string
+  narration: string
+  rationale: string
+  outline?: { beat: string; line: string }[]
+}
+
+export interface ScriptsResponse {
+  brief: { product: string; style: string }
+  scripts: ScriptDraft[]
 }
 
 export interface Plan {
@@ -130,6 +146,21 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** Top of the funnel: brief -> four competing ad-script concepts. */
+  scripts: (payload: {
+    product: string
+    selling_points: string[] | string
+    style: string
+    audience?: string | null
+    tone?: string | null
+    use_llm: boolean
+  }) =>
+    json<ScriptsResponse>('/api/scripts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
   /** Step 1: script -> scenes. Free; nothing is generated yet. */
   plan: (payload: { script: string; name: string; style: string; use_llm: boolean }) =>
     json<Plan>('/api/plan', {
@@ -143,7 +174,7 @@ export const api = {
   /** Step 3: render the confirmed scenes. This is the step that spends money. */
   render: (payload: {
     plan_id: string
-    scenes: { id: string; vo: string; prompt: string }[]
+    scenes: { id: string; vo: string; prompt: string; shot?: string; angle?: string; elements?: string[] }[]
     name: string
     style: string
     aspect: string

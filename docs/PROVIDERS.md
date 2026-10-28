@@ -89,7 +89,7 @@ This pipeline already assumes that shape, which is why the IR is shot-based.
 |---|---|---|---|---|---|
 | **Kling** | 快手 | 3D VAE + 3D DiT, Kling 4.0 | 15s (extendable) | physics, big motion, 4K native | Standard ≈ ¥66/mo |
 | **Jimeng / Seedance** | 字节 | unified audio-video | 15s / 30s | multimodal `@` references, CapCut integration | ¥33/mo (first month) |
-| **Hailuo** | MiniMax | Hailuo 2.3 / H3 | 10–12s | filmic realism, micro-expressions | intl $14.99/mo; CN free tier |
+| **Hailuo** | MiniMax | Hailuo 2.3 / **H3** (H3 / H3-Highspeed / H3-Lite) | 10–12s | filmic realism, micro-expressions | intl $14.99/mo; CN free tier |
 | **Vidu** | 生数 | UVM-DiT, Q3 | 16s | **multi-subject consistency as a reusable asset** | ¥48/mo |
 | **Wan / Tongyi Wanxiang** | 阿里 | **open weights** (Apache 2.0) 1.3B/14B | 15–30s | only major open-source one; Bailian API ¥0.6–1/s | API pay-as-you-go |
 
@@ -153,7 +153,7 @@ dropdown with a free-text "custom id" escape hatch.
 | jimeng | `JIMENG_REQ_KEY` | `jimeng_vgfm_t2v_l20`, `jimeng_vgfm_t2v_l25` |
 | veo | `VEO_MODEL` | `veo-3.1-generate-001`, `veo-3.1-fast-generate-001`, `veo-2.0-generate-001` |
 | bailian | `BAILIAN_MODEL` | `wan2.5-t2v-preview`, `wan2.2-t2v-plus`, `wan2.2-t2v-flash` |
-| minimax | `MINIMAX_MODEL` | `MiniMax-Hailuo-02`, `MiniMax-Hailuo-2.3`, `T2V-01-Director`, `T2V-01` |
+| minimax | `MINIMAX_MODEL` | `MiniMax-Hailuo-02`, `MiniMax-Hailuo-2.3`, `T2V-01-Director`, `T2V-01`, `MiniMax-H3`, `MiniMax-H3-Highspeed`, `MiniMax-H3-Lite` |
 | zhipu | `ZHIPU_MODEL` | `cogvideox-2`, `cogvideox-flash`, `cogvideox` |
 
 All six real adapters share `_AsyncVideoBase` (submit → poll → download)
@@ -291,3 +291,4 @@ exists.
 | 2026-10 | initial survey; edge-tts adopted as default voice; domestic video adapters written (Kling / Bailian / MiniMax / Zhipu) alongside Veo |
 | 2026-10 | Jimeng (即梦) adapter added — Volcengine AK/SK HMAC-SHA256 signing implemented inline, `req_key` overridable |
 | 2026-10 | model ids externalised per vendor (`*_MODEL` env vars + picker in the settings page); MiniMax retrieval fixed (`file_id` → `files/retrieve` → `download_url`) |
+| 2026-10 | brief → 4 ad-script frameworks (Pain→Solution / Grass-planting / Review / Story) added; scenes enriched with shot / angle / elements; MiniMax H3 / H3-Highspeed / H3-Lite models added |
