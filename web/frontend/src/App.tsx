@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toaster, toast } from 'sonner'
-import { AlertTriangle, Settings as SettingsIcon, Sparkles } from 'lucide-react'
+import { AlertTriangle, Send, Settings as SettingsIcon, Sparkles, Wand2 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { ProviderSettings } from '@/components/ProviderSettings'
 import { ScriptPanel, type GeneratePayload } from '@/components/ScriptPanel'
@@ -14,6 +14,7 @@ import { EditPanel } from '@/components/EditPanel'
 import { PublishPanel } from '@/components/PublishPanel'
 import { LogPanel } from '@/components/LogPanel'
 import { Badge } from '@/components/ui/primitives'
+import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { useJob } from '@/hooks/useJob'
 import { api, errorText, toastError, type Job, type Plan, type PlanScene, type Settings } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -146,12 +147,20 @@ export default function App() {
   const finished: Job | null = job
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="relative min-h-screen bg-background">
       <Toaster position="top-center" richColors />
+
+      {/* decorative brand backdrop */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -left-40 -top-40 h-[26rem] w-[26rem] rounded-full bg-primary/10 blur-3xl animate-pulse-soft" />
+        <div className="absolute -right-32 top-1/4 h-[30rem] w-[30rem] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-[24rem] w-[24rem] rounded-full bg-pink-500/10 blur-3xl" />
+      </div>
+
       <Header ready={ready} />
 
       {/* --------------------------------------------------- page switcher */}
-      <nav className="border-b bg-card/60">
+      <nav className="border-b bg-card/60 backdrop-blur">
         <div className="mx-auto flex max-w-[1400px] gap-1 px-6 pt-3">
           {(
             [
@@ -164,7 +173,7 @@ export default function App() {
               type="button"
               onClick={() => setPage(id)}
               className={cn(
-                '-mb-px flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                '-mb-px flex items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-2 text-xs font-medium transition-colors',
                 page === id
                   ? 'border-primary text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -193,34 +202,41 @@ export default function App() {
                   <StatusCard settings={settings} />
                 </>
               ) : (
-                <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground shadow-sm">
+                <div className="rounded-xl border bg-card p-5 text-sm text-muted-foreground shadow-sm">
                   Loading settings…
                 </div>
               )}
             </div>
             <div className="space-y-5">
-              <section className="rounded-lg border bg-card p-5 shadow-sm">
-                <h2 className="text-sm font-semibold">{t('settings.whatTitle')}</h2>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                  {t('settings.whatBody')}
-                </p>
-                <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-                  <li>· {t('settings.point1')}</li>
-                  <li>· {t('settings.point2')}</li>
-                  <li>· {t('settings.point3')}</li>
-                </ul>
-              </section>
+              <Panel>
+                <PanelHeader title={t('settings.whatTitle')} icon={SettingsIcon} />
+                <PanelBody className="space-y-3">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    {t('settings.whatBody')}
+                  </p>
+                  <ul className="space-y-1.5 text-xs text-muted-foreground">
+                    <li>· {t('settings.point1')}</li>
+                    <li>· {t('settings.point2')}</li>
+                    <li>· {t('settings.point3')}</li>
+                  </ul>
+                </PanelBody>
+              </Panel>
               <LogPanel lines={lines} />
             </div>
           </div>
         ) : (
           /* ==================================================== create */
           <div className="space-y-5">
-            <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+            {step === 'script' && !plan ? <CreateHero /> : null}
+
+            <div className="rounded-xl border bg-card px-4 py-3 shadow-sm">
               <Stepper current={step} maxReached={maxReached} onSelect={setStep} />
             </div>
 
-            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(420px,560px)_1fr]">
+            <div
+              key={step}
+              className="grid animate-fade-in grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(420px,560px)_1fr]"
+            >
               {/* -------------------------------------------------- left */}
               <div className="space-y-5">
                 {step === 'script' || !settings ? (
@@ -231,7 +247,7 @@ export default function App() {
                       onPlan={makePlan}
                     />
                   ) : (
-                    <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground shadow-sm">
+                    <div className="rounded-xl border bg-card p-5 text-sm text-muted-foreground shadow-sm">
                       Loading settings…
                     </div>
                   )
@@ -257,20 +273,24 @@ export default function App() {
                 ) : null}
 
                 {step === 'refine' ? (
-                  <section className="rounded-lg border bg-card p-5 shadow-sm">
-                    <h2 className="mb-3 text-sm font-semibold">{t('edit.title')}</h2>
-                    <EditPanel jobId={jobId} onRender={onEditRender} />
-                  </section>
+                  <Panel>
+                    <PanelHeader title={t('edit.title')} icon={Wand2} />
+                    <PanelBody>
+                      <EditPanel jobId={jobId} onRender={onEditRender} />
+                    </PanelBody>
+                  </Panel>
                 ) : null}
 
                 {step === 'publish' ? (
-                  <section className="rounded-lg border bg-card p-5 shadow-sm">
-                    <h2 className="mb-3 text-sm font-semibold">{t('publish.title')}</h2>
-                    <PublishPanel
-                      videoUrl={finished?.video_url ?? null}
-                      videoPath={finished?.video_path ?? null}
-                    />
-                  </section>
+                  <Panel>
+                    <PanelHeader title={t('publish.title')} icon={Send} />
+                    <PanelBody>
+                      <PublishPanel
+                        videoUrl={finished?.video_url ?? null}
+                        videoPath={finished?.video_path ?? null}
+                      />
+                    </PanelBody>
+                  </Panel>
                 ) : null}
               </div>
 
@@ -285,7 +305,7 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <section className="rounded-lg border bg-card shadow-sm">
+                <section className="rounded-xl border bg-card shadow-sm">
                   <LogPanel lines={lines} />
                 </section>
 
@@ -300,6 +320,26 @@ export default function App() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+/** Landing hero shown on the create page before a brief is drafted. */
+function CreateHero() {
+  const { t } = useTranslation()
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-brand-soft p-6 shadow-sm ring-1 ring-brand/20">
+      <div className="flex items-start gap-4">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand text-white shadow-md">
+          <Sparkles className="h-6 w-6" />
+        </span>
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold leading-tight">{t('hero.title')}</h1>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            {t('hero.sub')}
+          </p>
+        </div>
+      </div>
     </div>
   )
 }

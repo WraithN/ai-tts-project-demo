@@ -10,6 +10,11 @@ const en: typeof zh = {
     themeDark: 'Dark',
   },
 
+  hero: {
+    title: 'Turn a product into a finished ad — without touching a timeline',
+    sub: 'Describe the product, pick one of four ad angles, tweak the storyboard shot-by-shot, then render and publish. Nothing is billed until you confirm the copy.',
+  },
+
   status: {
     title: 'Provider status',
     ready: 'ready',

@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
+import { Activity } from 'lucide-react'
 import { Badge } from '@/components/ui/primitives'
+import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { Settings } from '@/lib/api'
 
 export function StatusCard({ settings }: { settings: Settings }) {
@@ -27,11 +29,9 @@ export function StatusCard({ settings }: { settings: Settings }) {
   ]
 
   return (
-    <section className="rounded-lg border bg-card shadow-sm">
-      <div className="p-5 pb-3">
-        <h2 className="text-sm font-semibold">{t('status.title')}</h2>
-      </div>
-      <div className="space-y-1 px-5 pb-5">
+    <Panel>
+      <PanelHeader title={t('status.title')} icon={Activity} />
+      <PanelBody className="space-y-1">
         {rows.map((r) => (
           <div
             key={r.label}
@@ -46,7 +46,7 @@ export function StatusCard({ settings }: { settings: Settings }) {
             ? t('status.envHint', { path: settings.env_file })
             : t('status.notReadyHint')}
         </p>
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   )
 }

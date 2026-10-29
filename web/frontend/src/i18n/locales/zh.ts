@@ -8,6 +8,11 @@ export default {
     themeDark: '深色',
   },
 
+  hero: {
+    title: '把一件产品，变成一支能发的广告片',
+    sub: '描述产品、从四套广告角度里挑一套、逐镜头微调分镜，然后渲染并发布。在你确认文案之前，不产生任何费用。',
+  },
+
   status: {
     title: 'Provider 状态',
     ready: '就绪',

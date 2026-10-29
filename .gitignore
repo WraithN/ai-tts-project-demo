@@ -37,3 +37,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# playwright-cli smoke artifacts
+web/frontend/.playwright-cli/

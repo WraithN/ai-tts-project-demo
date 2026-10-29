@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Progress, Switch } from '@/components/ui/primitives'
+import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { Settings } from '@/lib/api'
 import { stageLabel } from '@/lib/api'
 
@@ -63,13 +64,9 @@ export function ScriptPanel({
   }
 
   return (
-    <section className="rounded-lg border bg-card shadow-sm">
-      <div className="flex items-center justify-between p-5 pb-3">
-        <h2 className="text-sm font-semibold">{t('script.title')}</h2>
-        <Wand2 className="h-4 w-4 text-muted-foreground" />
-      </div>
-
-      <div className="space-y-4 px-5 pb-5">
+    <Panel>
+      <PanelHeader title={t('script.title')} icon={Wand2} />
+      <PanelBody className="space-y-4">
         <Textarea
           className="min-h-[168px] leading-relaxed"
           placeholder={t('script.placeholder')}
@@ -145,7 +142,7 @@ export function ScriptPanel({
           </div>
         </div>
 
-        <div className="space-y-2 rounded-md border p-3">
+        <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">
           <label className="flex items-center justify-between gap-3 text-sm">
             <span>{t('script.useLlm')}</span>
             <Switch checked={useLlm} onCheckedChange={setUseLlm} />
@@ -156,7 +153,7 @@ export function ScriptPanel({
           </label>
         </div>
 
-        <Button className="w-full" onClick={submit} disabled={running || !script.trim()}>
+        <Button className="w-full bg-brand hover:opacity-90" onClick={submit} disabled={running || !script.trim()}>
           {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
           {running ? t('script.planning') : t('script.plan')}
         </Button>
@@ -172,7 +169,7 @@ export function ScriptPanel({
             </div>
           </div>
         ) : null}
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   )
 }

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Loader2, Pencil, RefreshCw, Video } from 'lucide-react'
+import { Camera, Check, ClipboardCheck, Loader2, Pencil, RefreshCw, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/primitives'
+import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { PlanScene } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -63,29 +64,32 @@ export function SceneConfirm({
   const estSeconds = Math.round(totalWords / 2.6)
 
   return (
-    <section className="rounded-lg border bg-card shadow-sm">
-      <div className="flex items-center justify-between p-5 pb-3">
-        <div>
-          <h2 className="text-sm font-semibold">{t('confirm.title')}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{t('confirm.subtitle')}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge variant="outline">
-            {t('confirm.count', { n: draft.length })}
-          </Badge>
-          <Badge variant="outline">~{estSeconds}s</Badge>
-        </div>
-      </div>
-
-      <div className="space-y-3 px-5 pb-5">
+    <Panel>
+      <PanelHeader
+        title={t('confirm.title')}
+        icon={ClipboardCheck}
+        subtitle={t('confirm.subtitle')}
+        action={
+          <div className="flex items-center gap-2">
+            <Badge variant="outline">{t('confirm.count', { n: draft.length })}</Badge>
+            <Badge variant="outline">~{estSeconds}s</Badge>
+          </div>
+        }
+      />
+      <PanelBody className="space-y-3">
         <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
           {draft.map((s, i) => (
-            <div key={s.id} className="rounded-md border bg-background/40 p-3">
+            <div key={s.id} className="rounded-lg border bg-background/40 p-3">
               <div className="mb-2 flex items-center gap-2">
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand font-mono text-[11px] font-semibold text-white">
                   {String(i + 1).padStart(2, '0')}
                 </span>
-                <Badge variant="secondary">{t(`beat.${s.beat}`, { defaultValue: s.beat })}</Badge>
+                <Badge
+                  variant="secondary"
+                  className="bg-primary/10 text-primary hover:bg-primary/15"
+                >
+                  {t(`beat.${s.beat}`, { defaultValue: s.beat })}
+                </Badge>
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <Pencil className="h-3 w-3" />
                   {s.id}
@@ -147,37 +151,31 @@ export function SceneConfirm({
                   />
                 </div>
 
-                <details className="group rounded-md border border-dashed border-muted-foreground/30 px-2 py-1.5">
-                  <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/20 p-2.5">
+                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                    <Camera className="h-3.5 w-3.5 text-primary" />
                     {t('confirm.shot')} · {t('confirm.angle')} · {t('confirm.elements')}
-                  </summary>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">{t('confirm.shot')}</Label>
-                      <input
-                        className="h-7 w-full rounded border bg-background px-2 text-xs"
-                        value={s.shot}
-                        onChange={(e) => patch(s.id, 'shot', e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">{t('confirm.angle')}</Label>
-                      <input
-                        className="h-7 w-full rounded border bg-background px-2 text-xs"
-                        value={s.angle}
-                        onChange={(e) => patch(s.id, 'angle', e.target.value)}
-                      />
-                    </div>
-                    <div className="col-span-2 space-y-1">
-                      <Label className="text-[10px] text-muted-foreground">{t('confirm.elements')}</Label>
-                      <input
-                        className="h-7 w-full rounded border bg-background px-2 text-xs"
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <CineField
+                      label={t('confirm.shot')}
+                      value={s.shot}
+                      onChange={(v) => patch(s.id, 'shot', v)}
+                    />
+                    <CineField
+                      label={t('confirm.angle')}
+                      value={s.angle}
+                      onChange={(v) => patch(s.id, 'angle', v)}
+                    />
+                    <div className="col-span-2">
+                      <CineField
+                        label={t('confirm.elements')}
                         value={(s.elements || []).join(', ')}
-                        onChange={(e) => patchElements(s.id, e.target.value)}
+                        onChange={(v) => patchElements(s.id, v)}
                       />
                     </div>
                   </div>
-                </details>
+                </div>
               </div>
             </div>
           ))}
@@ -192,7 +190,7 @@ export function SceneConfirm({
             {t('confirm.reparse')}
           </Button>
           <Button
-            className="sm:ml-auto sm:w-auto"
+            className="bg-brand hover:opacity-90 sm:ml-auto sm:w-auto"
             onClick={() => onConfirm(draft)}
             disabled={busy || draft.length === 0}
           >
@@ -205,7 +203,28 @@ export function SceneConfirm({
           <Video className="mt-0.5 h-3 w-3 shrink-0" />
           {t('confirm.spendNote')}
         </p>
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
+  )
+}
+
+function CineField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-[10px] text-muted-foreground">{label}</Label>
+      <input
+        className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
   )
 }

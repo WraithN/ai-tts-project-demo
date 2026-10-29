@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, Sparkles, Wand2 } from 'lucide-react'
+import { Clapperboard, Leaf, Loader2, Sparkles, ThumbsUp, Wand2, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,9 +12,28 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/primitives'
+import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { cn } from '@/lib/utils'
 import { api, toastError, type ScriptDraft, type Settings } from '@/lib/api'
 import { STYLES } from './ScriptPanel'
+
+const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  pain_solution: Zap,
+  grass_planting: Leaf,
+  review_proof: ThumbsUp,
+  story_drama: Clapperboard,
+}
+
+const SAMPLES: { product: string; points: string }[] = [
+  {
+    product: 'Lumo sleep lamp',
+    points: 'falls asleep 2x faster\nwarm sunrise wake-up light\nno blue light after dark',
+  },
+  {
+    product: 'Pico portable blender',
+    points: 'blend anywhere, USB-C\n14 oz cup doubles as bottle\ncrushes ice in 20s',
+  },
+]
 
 /**
  * Step 1 (new): product brief -> four competing ad-script concepts.
@@ -97,14 +116,15 @@ export function BriefPanel({
     })
   }
 
-  return (
-    <section className="rounded-lg border bg-card shadow-sm">
-      <div className="flex items-center justify-between p-5 pb-3">
-        <h2 className="text-sm font-semibold">{t('brief.title')}</h2>
-        <Wand2 className="h-4 w-4 text-muted-foreground" />
-      </div>
+  const applySample = (s: { product: string; points: string }) => {
+    setProduct(s.product)
+    setPoints(s.points)
+  }
 
-      <div className="space-y-4 px-5 pb-5">
+  return (
+    <Panel>
+      <PanelHeader title={t('brief.title')} icon={Wand2} />
+      <PanelBody className="space-y-4">
         <div className="space-y-1.5">
           <Label className="text-xs">{t('brief.product')}</Label>
           <Textarea
@@ -123,6 +143,18 @@ export function BriefPanel({
             value={points}
             onChange={(e) => setPoints(e.target.value)}
           />
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {SAMPLES.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => applySample(s)}
+                className="rounded-full border border-dashed border-muted-foreground/30 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+              >
+                {s.product}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -180,20 +212,20 @@ export function BriefPanel({
           </div>
         </div>
 
-        <div className="space-y-2 rounded-md border p-3">
+        <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">
           <label className="flex items-center justify-between gap-3 text-sm">
             <span>{t('brief.useLlm')}</span>
             <input
               type="checkbox"
               checked={useLlm}
               onChange={(e) => setUseLlm(e.target.checked)}
-              className="h-4 w-4"
+              className="h-4 w-4 accent-[hsl(var(--primary))]"
             />
           </label>
           <p className="text-[11px] text-muted-foreground">{t('brief.useLlmHint')}</p>
         </div>
 
-        <Button className="w-full" onClick={generate} disabled={busy}>
+        <Button className="w-full bg-brand hover:opacity-90" onClick={generate} disabled={busy}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {busy ? t('brief.generating') : t('brief.generate')}
         </Button>
@@ -203,48 +235,63 @@ export function BriefPanel({
             <p className="text-xs font-medium text-muted-foreground">{t('brief.choose')}</p>
             {drafts.map((s) => {
               const active = selected === s.type
+              const Icon = TYPE_ICONS[s.type]
               return (
-                <div
+                <button
                   key={s.type}
-                  className={cn(
-                    'cursor-pointer rounded-md border p-3 transition-colors',
-                    active ? 'border-primary bg-primary/5' : 'bg-background/40 hover:bg-background',
-                  )}
+                  type="button"
                   onClick={() => setSelected(s.type)}
+                  className={cn(
+                    'block w-full rounded-lg border p-3 text-left transition-all',
+                    active
+                      ? 'border-primary bg-brand-soft shadow-sm ring-1 ring-primary/30'
+                      : 'border-border bg-background/40 hover:bg-background',
+                  )}
                 >
                   <div className="mb-2 flex items-center gap-2">
                     <span
                       className={cn(
-                        'flex h-4 w-4 items-center justify-center rounded-full border',
-                        active ? 'border-primary' : 'border-muted-foreground/40',
+                        'flex h-5 w-5 items-center justify-center rounded-full border text-[10px]',
+                        active
+                          ? 'border-transparent bg-primary text-primary-foreground'
+                          : 'border-muted-foreground/40 text-muted-foreground',
                       )}
                     >
-                      {active ? <span className="h-2 w-2 rounded-full bg-primary" /> : null}
+                      {active ? '✓' : ''}
                     </span>
-                    <span className="text-sm font-semibold">{t(`scriptType.${s.type}`, { defaultValue: s.title })}</span>
+                    {Icon ? (
+                      <Icon className={cn('h-4 w-4', active ? 'text-primary' : 'text-muted-foreground')} />
+                    ) : null}
+                    <span className="text-sm font-semibold">
+                      {t(`scriptType.${s.type}`, { defaultValue: s.title })}
+                    </span>
                     <Badge variant="outline" className="ml-auto text-[10px]">
                       {s.rationale}
                     </Badge>
                   </div>
                   <Textarea
-                    className="min-h-[120px] resize-y text-xs leading-relaxed"
+                    className="min-h-[120px] resize-y border-transparent bg-transparent text-xs leading-relaxed focus-visible:border-input focus-visible:bg-background"
                     value={narrationOf(s)}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) =>
                       setEdited((v) => ({ ...v, [s.type]: e.target.value }))
                     }
                   />
-                </div>
+                </button>
               )
             })}
 
-            <Button className="w-full" onClick={next} disabled={!selected || planBusy}>
+            <Button
+              className="w-full bg-brand hover:opacity-90"
+              onClick={next}
+              disabled={!selected || planBusy}
+            >
               {planBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               {planBusy ? t('brief.planning') : t('brief.toScenes')}
             </Button>
           </div>
         ) : null}
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   )
 }
