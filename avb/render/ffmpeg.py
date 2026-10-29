@@ -51,6 +51,21 @@ def probe_duration(path: str | Path) -> float:
         return 0.0
 
 
+def extract_frame(video: str | Path, out: Path) -> Path:
+    """Save the first frame of a video as an image (poster frame).
+
+    Used to turn a generated clip (mp4 from a vendor API) into the still
+    background the compositor paints on. Raises FFmpegError when ffmpeg
+    cannot produce a non-empty file.
+    """
+    out = Path(out)
+    r = _run(["-i", str(video), "-frames:v", "1", str(out)])
+    if r.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        detail = r.stderr.decode(errors="replace")[-300:] if r.stderr else "no output"
+        raise FFmpegError(f"extract_frame failed: {detail}")
+    return out
+
+
 def encode_segment(
     frames: Iterator[np.ndarray],
     w: int,

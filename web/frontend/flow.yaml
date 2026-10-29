@@ -1,0 +1,92 @@
+- generic [ref=e3]:
+  - region "Notifications alt+T"
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: AI Video Builder
+        - generic [ref=e12]: Script in · finished ad out · publish to TikTok
+      - generic [ref=e13]:
+        - generic [ref=e14]: ready
+        - button "Language" [ref=e16] [cursor=pointer]
+        - 'button "Theme: Light" [ref=e17] [cursor=pointer]'
+  - navigation [ref=e18]:
+    - generic [ref=e19]:
+      - button "Create" [ref=e20] [cursor=pointer]
+      - button "Settings" [ref=e23] [cursor=pointer]
+  - main [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e34]:
+        - heading "Turn a product into a finished ad — without touching a timeline" [level=1] [ref=e35]
+        - paragraph [ref=e36]: Describe the product, pick one of four ad angles, tweak the storyboard shot-by-shot, then render and publish. Nothing is billed until you confirm the copy.
+      - list [ref=e38]:
+        - listitem [ref=e39]:
+          - button "Script 01" [ref=e40] [cursor=pointer]:
+            - generic [ref=e45]:
+              - generic [ref=e46]: Script
+              - generic [ref=e47]: "01"
+        - listitem [ref=e49]:
+          - button "Confirm copy 02" [disabled] [ref=e50]:
+            - generic [ref=e56]:
+              - generic [ref=e57]: Confirm copy
+              - generic [ref=e58]: "02"
+        - listitem [ref=e60]:
+          - button "Render 03" [disabled] [ref=e61]:
+            - generic [ref=e68]:
+              - generic [ref=e69]: Render
+              - generic [ref=e70]: "03"
+        - listitem [ref=e72]:
+          - button "Refine 04" [disabled] [ref=e73]:
+            - generic [ref=e78]:
+              - generic [ref=e79]: Refine
+              - generic [ref=e80]: "04"
+        - listitem [ref=e82]:
+          - button "Publish 05" [disabled] [ref=e83]:
+            - generic [ref=e88]:
+              - generic [ref=e89]: Publish
+              - generic [ref=e90]: "05"
+      - generic [ref=e91]:
+        - generic [ref=e93]:
+          - heading "Product brief → ad scripts" [level=2] [ref=e101]
+          - generic [ref=e102]:
+            - generic [ref=e103]:
+              - text: Product
+              - textbox "e.g. Lumo sleep lamp" [ref=e104]
+            - generic [ref=e105]:
+              - text: Selling points
+              - 'textbox "One per line: falls asleep 2x faster warm sunrise wake-up light" [ref=e106]':
+                - /placeholder: "One per line:\nfalls asleep 2x faster\nwarm sunrise wake-up light"
+              - generic [ref=e107]:
+                - button "Lumo sleep lamp" [ref=e108] [cursor=pointer]
+                - button "Pico portable blender" [ref=e109] [cursor=pointer]
+            - generic [ref=e110]:
+              - generic [ref=e111]:
+                - text: Visual style
+                - combobox [ref=e112] [cursor=pointer]:
+                  - generic: DR VSL (direct response)
+              - generic [ref=e115]:
+                - text: Tone (optional)
+                - textbox "e.g. reassuring, premium, playful" [ref=e116]
+            - generic [ref=e117]:
+              - generic [ref=e118]:
+                - text: Audience (optional)
+                - textbox "e.g. new parents, night-shift workers" [ref=e119]
+              - generic [ref=e120]:
+                - text: Video model (this run only)
+                - combobox [ref=e121] [cursor=pointer]:
+                  - generic: Leave empty to use the default saved in settings
+            - generic [ref=e124]:
+              - text: Video length
+              - generic [ref=e125]:
+                - button "-5s" [ref=e126] [cursor=pointer]
+                - generic [ref=e127]:
+                  - spinbutton [ref=e128]: "30"
+                  - generic: s
+                - button "+5s" [ref=e129] [cursor=pointer]
+              - paragraph [ref=e130]: Target total length, 10–60s (±5 per step). Scenes are stretched to fit; voice and captions stay in sync.
+            - generic [ref=e131]:
+              - generic [ref=e132]:
+                - generic [ref=e133]: LLM script writer
+                - checkbox "LLM script writer" [checked] [ref=e134]
+              - paragraph [ref=e135]: Off = deterministic templates (works offline). On = richer, varied copy.
+            - button "Generate 4 ad scripts" [ref=e136] [cursor=pointer]
+        - generic [ref=e137]: Waiting for a job…

@@ -184,6 +184,8 @@ const en: typeof zh = {
     tonePlaceholder: 'e.g. reassuring, premium, playful',
     audience: 'Audience (optional)',
     audiencePlaceholder: 'e.g. new parents, night-shift workers',
+    duration: 'Video length',
+    durationHint: 'Target total length, 10–60s (±5 per step). Scenes are stretched to fit; voice and captions stay in sync.',
     useLlm: 'LLM script writer',
     useLlmHint: 'Off = deterministic templates (works offline). On = richer, varied copy.',
     generate: 'Generate 4 ad scripts',

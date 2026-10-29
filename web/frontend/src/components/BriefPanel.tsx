@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Clapperboard, Leaf, Loader2, Sparkles, ThumbsUp, Wand2, Zap } from 'lucide-react'
+import { Clapperboard, Leaf, Loader2, Minus, Plus, Sparkles, ThumbsUp, Wand2, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -23,6 +23,13 @@ const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   review_proof: ThumbsUp,
   story_drama: Clapperboard,
 }
+
+const DURATION_MIN = 10
+const DURATION_MAX = 60
+const DURATION_STEP = 5
+
+const clampDuration = (v: number) =>
+  Math.min(DURATION_MAX, Math.max(DURATION_MIN, Math.round(v)))
 
 const SAMPLES: { product: string; points: string }[] = [
   {
@@ -58,6 +65,7 @@ export function BriefPanel({
     use_llm: boolean
     video_provider: string | null
     voice_provider: string | null
+    target_seconds: number | null
   }) => void
 }) {
   const { t } = useTranslation()
@@ -67,6 +75,7 @@ export function BriefPanel({
   const [audience, setAudience] = useState('')
   const [tone, setTone] = useState('')
   const [useLlm, setUseLlm] = useState(true)
+  const [targetSec, setTargetSec] = useState(30)
 
   const [videoOverride, setVideoOverride] = useState('__default__')
 
@@ -113,6 +122,7 @@ export function BriefPanel({
       use_llm: useLlm,
       video_provider: videoOverride === '__default__' ? null : videoOverride,
       voice_provider: null,
+      target_seconds: targetSec,
     })
   }
 
@@ -210,6 +220,53 @@ export function BriefPanel({
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-xs">{t('brief.duration')}</Label>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              disabled={targetSec <= DURATION_MIN}
+              onClick={() => setTargetSec((v) => clampDuration(v - DURATION_STEP))}
+              title={`-${DURATION_STEP}s`}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <div className="relative flex-1">
+              <input
+                type="number"
+                min={DURATION_MIN}
+                max={DURATION_MAX}
+                step={DURATION_STEP}
+                value={targetSec}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10)
+                  if (!Number.isNaN(v)) setTargetSec(clampDuration(v))
+                }}
+                onBlur={() => setTargetSec((v) => clampDuration(v))}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                s
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              disabled={targetSec >= DURATION_MAX}
+              onClick={() => setTargetSec((v) => clampDuration(v + DURATION_STEP))}
+              title={`+${DURATION_STEP}s`}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('brief.durationHint')}</p>
         </div>
 
         <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">

@@ -181,6 +181,7 @@ export const api = {
     draft: boolean
     video_provider: string | null
     voice_provider: string | null
+    target_seconds?: number | null
   }) =>
     json<{ job_id: string }>('/api/render', {
       method: 'POST',

@@ -543,6 +543,9 @@ class RenderRequest(BaseModel):
     video_provider: str | None = None
     voice_provider: str | None = None
     out_name: str | None = None
+    # Target total length in seconds. Scenes are scaled proportionally after
+    # voice synthesis; VO/caption sync is untouched.
+    target_seconds: float | None = None
 
 
 def _scene_view(scene: object) -> dict:
@@ -727,7 +730,14 @@ def _run_render(job_id: str, params: dict):
         _projects[params["plan_id"]] = project
 
         _update_job(job_id, stage="rendering", progress=0.3, message="Rendering scenes...")
-        report = pipe.run(project, out_path)
+        raw_target = params.get("target_seconds")
+        try:
+            target = float(raw_target) if raw_target else None
+        except (TypeError, ValueError):
+            target = None
+        if target is not None:
+            target = min(60.0, max(5.0, target))
+        report = pipe.run(project, out_path, target_seconds=target)
 
         def _count(v):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)

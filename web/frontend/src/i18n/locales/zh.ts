@@ -169,6 +169,8 @@ export default {
     tonePlaceholder: '例：安心、高级感、俏皮',
     audience: '目标人群（可选）',
     audiencePlaceholder: '例：新手爸妈、夜班族',
+    duration: '视频时长',
+    durationHint: '成片目标总时长，10–60 秒（每次 ±5）。各场景等比拉伸以贴近目标，配音与字幕保持同步。',
     useLlm: '用 LLM 写脚本',
     useLlmHint: '关掉 = 用确定性模板（离线可用）；打开 = 文案更丰富多变。',
     generate: '生成 4 套广告脚本',

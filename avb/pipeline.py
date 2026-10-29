@@ -39,6 +39,39 @@ TAIL_PAD = 0.22
 # the segment cache key so a compositor fix actually reaches the output.
 RENDER_VERSION = "3-caption-wrap"
 
+# Magic bytes of image formats the compositor can open. Anything else copied
+# into bg.png (an mp4 from a vendor API, a truncated download, an error page)
+# used to blow up PIL with "cannot identify image file" mid-render.
+_IMAGE_MAGIC: tuple[tuple[int, bytes], ...] = (
+    (0, b"\x89PNG"),
+    (0, b"\xff\xd8\xff"),  # JPEG
+    (0, b"GIF8"),
+    (0, b"BM"),  # BMP
+    (0, b"RIFF"),  # WebP (checked together with WEBP at offset 8)
+)
+
+
+def is_image_file(path: Path) -> bool:
+    """Cheap magic-byte check; PIL itself stays out of the hot path."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return False
+    if head[8:12] == b"WEBP":
+        return True
+    return any(head.startswith(magic) for _, magic in _IMAGE_MAGIC)
+
+
+def _hex_rgb(color: str) -> tuple[int, int, int]:
+    h = (color or "#101820").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return 16, 18, 24
+
 
 @dataclass
 class SceneTiming:
@@ -160,11 +193,64 @@ class Pipeline:
                 h=project.height,
                 cache=self.cache,
             )
-            shutil.copyfile(vres.path, bg_path)
+            self._write_bg(vres.path, bg_path, project)
             self.ledger.add(vres.cost.provider, "video", vres.cost.usd, vres.cost.units, vres.cost.unit)
 
             out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
         return out
+
+    def _write_bg(self, src: Path, bg_path: Path, project: Project) -> None:
+        """Guarantee bg_path is an image the compositor can open, come what may.
+
+        AI video vendors return mp4/webm; a naive copyfile put video bytes in
+        a file named .png and PIL died with "cannot identify image file" on
+        the first scene. Now: real images are copied as-is, videos get their
+        poster frame extracted, and if even that fails we paint a solid brand
+        colour so the render degrades instead of dying.
+        """
+        src = Path(src)
+        if is_image_file(src):
+            shutil.copyfile(src, bg_path)
+            return
+        try:
+            ffmpeg.extract_frame(src, bg_path)
+            if is_image_file(bg_path):
+                return
+        except Exception as e:  # noqa: BLE001 - any failure falls through
+            print(f"[avb] bg poster extraction failed ({e}); using solid colour",
+                  file=sys.stderr)
+        self._write_solid_bg(bg_path, project)
+
+    @staticmethod
+    def _write_solid_bg(bg_path: Path, project: Project) -> None:
+        from PIL import Image
+
+        img = Image.new("RGB", (project.width, project.height), _hex_rgb(project.brand.ink))
+        img.save(bg_path, format="PNG")
+
+    def _apply_target_duration(self, project: Project, assets: dict[str, SceneAssets], target: float) -> None:
+        """Stretch/shrink scenes proportionally so the video runs ~target seconds.
+
+        VO always plays at its natural speed from each scene's start, and
+        captions ride the word-level timings, so scaling only ever changes
+        how long a scene *lingers* after its line -- never lip/caption sync.
+        Per-scene length is clamped to [1, 20]s so a 3-scene 60s target
+        cannot produce one absurd 40s freeze frame.
+        """
+        naturals = {
+            s.id: self.scene_duration(s, assets[s.id])
+            for s in project.scenes
+            if s.id in assets
+        }
+        total_natural = sum(naturals.values())
+        if total_natural <= 0 or not naturals:
+            return
+        factor = max(0.1, target) / total_natural
+        for s in project.scenes:
+            d = naturals.get(s.id)
+            if d is None:
+                continue
+            s.duration = round(min(20.0, max(1.0, d * factor)), 4)
 
     def load_assets(self, project: Project) -> dict[str, SceneAssets]:
         """Read back previously synthesized assets from the project dir."""
@@ -364,7 +450,13 @@ class Pipeline:
         return out.astype(np.float32)
 
     # -- top level ---------------------------------------------------------
-    def run(self, project: Project, out: str | Path, only: set[str] | None = None) -> RunReport:
+    def run(
+        self,
+        project: Project,
+        out: str | Path,
+        only: set[str] | None = None,
+        target_seconds: float | None = None,
+    ) -> RunReport:
         t0 = time.time()
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -380,6 +472,9 @@ class Pipeline:
         assets.update(fresh)
         for sid, a in fresh.items():
             self._save_meta(project, next(s for s in project.scenes if s.id == sid), a)
+
+        if target_seconds:
+            self._apply_target_duration(project, assets, float(target_seconds))
 
         video, timings, total, rendered, reused = self.assemble(project, assets, out)
 

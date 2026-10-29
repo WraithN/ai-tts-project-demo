@@ -398,10 +398,16 @@ def render_scene_frames(
 
     bg_img = None
     if assets.bg and assets.bg.is_file():
-        bg_img = Image.open(assets.bg).convert("RGB")
-        # upscale slightly so we always have room for zoom/pan
-        bg_img = bg_img.resize((int(W * 1.28), int(H * 1.28)), Image.BILINEAR)
-    else:
+        # The pipeline normalises bg to a real image, but stay defensive: a
+        # stale/corrupt file here used to kill the whole render with
+        # "cannot identify image file" instead of degrading to a flat card.
+        try:
+            bg_img = Image.open(assets.bg).convert("RGB")
+            # upscale slightly so we always have room for zoom/pan
+            bg_img = bg_img.resize((int(W * 1.28), int(H * 1.28)), Image.BILINEAR)
+        except Exception:
+            bg_img = None
+    if bg_img is None:
         bg_img = Image.new("RGB", (int(W * 1.28), int(H * 1.28)), hex2rgb(project.brand.ink))
 
     duration = scene.duration if scene.duration is not None else (assets.vo_duration + 0.22)

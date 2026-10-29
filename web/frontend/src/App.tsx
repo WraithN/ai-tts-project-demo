@@ -109,6 +109,7 @@ export default function App() {
         draft: p?.draft ?? false,
         video_provider: p?.video_provider ?? null,
         voice_provider: p?.voice_provider ?? null,
+        target_seconds: p?.target_seconds ?? null,
       })
       setJobId(r.job_id)
       onLog(`> confirmed ${scenes.length} scenes · job ${r.job_id}`)
@@ -296,7 +297,9 @@ export default function App() {
 
               {/* ------------------------------------------------- right */}
               <div className="space-y-5">
-                <PreviewCard job={finished} />
+                {/* Nothing to preview until a render job exists — before
+                    that the placeholder was pure noise. */}
+                {jobId ? <PreviewCard job={finished} /> : null}
 
                 {finished?.error ? (
                   <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">

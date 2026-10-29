@@ -27,6 +27,7 @@ export interface GeneratePayload {
   use_llm: boolean
   video_provider: string | null
   voice_provider: string | null
+  target_seconds: number | null
 }
 
 export function ScriptPanel({
@@ -60,6 +61,7 @@ export function ScriptPanel({
       use_llm: useLlm,
       video_provider: videoOverride === '__default__' ? null : videoOverride,
       voice_provider: voice === 'auto' ? null : voice,
+      target_seconds: null,
     })
   }
 
