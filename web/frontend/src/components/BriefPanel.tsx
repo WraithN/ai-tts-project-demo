@@ -198,11 +198,11 @@ export function BriefPanel({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 items-start gap-3">
           <div className="space-y-1.5">
             <Label className="text-xs">{t('brief.audience')}</Label>
             <Textarea
-              className="min-h-[40px] resize-none"
+              className="min-h-[44px] resize-none"
               placeholder={t('brief.audiencePlaceholder')}
               value={audience}
               onChange={(e) => setAudience(e.target.value)}
@@ -215,7 +215,7 @@ export function BriefPanel({
           <div className="space-y-1.5">
             <Label className="text-xs">{t('brief.tone')}</Label>
             <Textarea
-              className="min-h-[40px] resize-none"
+              className="min-h-[44px] resize-none"
               placeholder={t('brief.tonePlaceholder')}
               value={tone}
               onChange={(e) => setTone(e.target.value)}
@@ -336,7 +336,7 @@ export function BriefPanel({
           <p className="text-[11px] text-muted-foreground">{t('brief.useLlmHint')}</p>
         </div>
 
-        <Button className="w-full bg-brand hover:opacity-90" onClick={generate} disabled={scriptsBusy}>
+        <Button className="w-full bg-brand-btn hover:opacity-90" onClick={generate} disabled={scriptsBusy}>
           {scriptsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {scriptsBusy ? t('brief.generating') : t('brief.generate')}
         </Button>
@@ -407,7 +407,7 @@ export function BriefPanel({
             })}
 
             <Button
-              className="w-full bg-brand hover:opacity-90"
+              className="w-full bg-brand-btn hover:opacity-90"
               onClick={next}
               disabled={!selected || planBusy}
             >

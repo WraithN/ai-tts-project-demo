@@ -283,7 +283,7 @@ export default function App() {
 
             <div
               key={step}
-              className="grid animate-fade-in grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(420px,560px)_1fr]"
+              className="grid animate-fade-in grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_380px]"
             >
               {/* -------------------------------------------------- left */}
               <div className="space-y-5">
@@ -348,8 +348,10 @@ export default function App() {
 
               {/* ------------------------------------------------- right */}
               {/* Fixed layout: results + task progress always live here,
-                  regardless of which step the left column is showing. */}
-              <div className="space-y-5">
+                  regardless of which step the left column is showing. On
+                  large screens it stays pinned so a long scene list on the
+                  left never leaves the progress panel stranded below. */}
+              <div className="space-y-5 lg:sticky lg:top-[72px] lg:self-start">
                 <TaskPanel
                   active={task}
                   job={job}

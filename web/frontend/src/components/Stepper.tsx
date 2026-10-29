@@ -67,7 +67,7 @@ export function Stepper({
                 >
                   {t(`steps.${s}`)}
                 </span>
-                <span className="block text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/90">
                   {String(i + 1).padStart(2, '0')}
                 </span>
               </span>

@@ -8,25 +8,26 @@
     --foreground: 224 24% 12%;
     --card: 0 0% 100%;
     --card-foreground: 224 24% 12%;
-    --primary: 243 75% 59%;
+    --primary: 243 72% 54%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 14% 96%;
     --secondary-foreground: 224 24% 12%;
     --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 40%;
+    --muted-foreground: 220 11% 33%;
     --accent: 220 14% 96%;
     --accent-foreground: 224 24% 12%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 243 75% 59%;
+    --border: 220 13% 86%;
+    --input: 220 13% 86%;
+    --ring: 243 72% 54%;
     --radius: 0.75rem;
 
-    /* Brand gradient stops (shared by light + dark) */
-    --brand-1: 243 75% 59%;
-    --brand-2: 280 78% 62%;
-    --brand-3: 330 82% 62%;
+    /* Brand gradient stops (shared by light + dark) — deepened so white
+       text on the gradient still clears WCAG AA at the pink end. */
+    --brand-1: 243 75% 55%;
+    --brand-2: 280 73% 55%;
+    --brand-3: 330 72% 49%;
   }
 
   .dark {
@@ -34,7 +35,7 @@
     --foreground: 210 20% 96%;
     --card: 224 28% 10%;
     --card-foreground: 210 20% 96%;
-    --primary: 243 80% 67%;
+    --primary: 243 78% 64%;
     --primary-foreground: 224 32% 7%;
     --secondary: 224 20% 16%;
     --secondary-foreground: 210 20% 96%;
@@ -112,6 +113,16 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+  /* Solid-weight button gradient: darker stops so white label clears 4.5:1
+     even at the pink end — used for the primary CTAs, not decorative chips. */
+  .bg-brand-btn {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--brand-1) / 0.96),
+      hsl(280 70% 50%) 55%,
+      hsl(var(--brand-3))
+    );
   }
   /* Primary-tinted glow used on active / hero elements. */
   .glow-primary {
