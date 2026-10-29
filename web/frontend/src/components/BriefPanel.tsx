@@ -14,7 +14,7 @@ import {
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { cn } from '@/lib/utils'
-import { api, toastError, type ScriptDraft, type Settings } from '@/lib/api'
+import { toastError, type ScriptDraft, type Settings } from '@/lib/api'
 import { STYLES } from './ScriptPanel'
 
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -53,10 +53,24 @@ const SAMPLES: { product: string; points: string }[] = [
 export function BriefPanel({
   settings,
   planBusy,
+  scriptsBusy,
+  runScripts,
+  onScriptsReady,
   onPlan,
 }: {
   settings: Settings
   planBusy: boolean
+  scriptsBusy: boolean
+  /** Brief -> 4 scripts, run as a tracked background job by the app shell. */
+  runScripts: (payload: {
+    product: string
+    selling_points: string[] | string
+    style: string
+    audience: string | null
+    tone: string | null
+    use_llm: boolean
+  }) => Promise<{ scripts: ScriptDraft[] }>
+  onScriptsReady: () => void
   onPlan: (p: {
     script: string
     style: string
@@ -79,7 +93,6 @@ export function BriefPanel({
 
   const [videoOverride, setVideoOverride] = useState('__default__')
 
-  const [busy, setBusy] = useState(false)
   const [drafts, setDrafts] = useState<ScriptDraft[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [edited, setEdited] = useState<Record<string, string>>({})
@@ -89,9 +102,8 @@ export function BriefPanel({
       toastError(new Error(t('brief.needInput')))
       return
     }
-    setBusy(true)
     try {
-      const r = await api.scripts({
+      const r = await runScripts({
         product: product.trim(),
         selling_points: points,
         style,
@@ -102,10 +114,9 @@ export function BriefPanel({
       setDrafts(r.scripts)
       setEdited(Object.fromEntries(r.scripts.map((s) => [s.type, s.narration])))
       setSelected(r.scripts[0]?.type ?? null)
+      onScriptsReady()
     } catch (e) {
       toastError(e)
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -282,9 +293,9 @@ export function BriefPanel({
           <p className="text-[11px] text-muted-foreground">{t('brief.useLlmHint')}</p>
         </div>
 
-        <Button className="w-full bg-brand hover:opacity-90" onClick={generate} disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {busy ? t('brief.generating') : t('brief.generate')}
+        <Button className="w-full bg-brand hover:opacity-90" onClick={generate} disabled={scriptsBusy}>
+          {scriptsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          {scriptsBusy ? t('brief.generating') : t('brief.generate')}
         </Button>
 
         {drafts.length ? (
@@ -293,13 +304,26 @@ export function BriefPanel({
             {drafts.map((s) => {
               const active = selected === s.type
               const Icon = TYPE_ICONS[s.type]
+              // A real <button> would nest the editable <textarea> inside
+              // interactive-inside-interactive (invalid HTML), and clicks on
+              // the textarea never reached the selection handler -- which is
+              // why picking a card kept the first one selected. A div with
+              // proper a11y wiring + textarea focus selects the card.
               return (
-                <button
+                <div
                   key={s.type}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={active}
                   onClick={() => setSelected(s.type)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setSelected(s.type)
+                    }
+                  }}
                   className={cn(
-                    'block w-full rounded-lg border p-3 text-left transition-all',
+                    'block w-full cursor-pointer rounded-lg border p-3 text-left transition-all',
                     active
                       ? 'border-primary bg-brand-soft shadow-sm ring-1 ring-primary/30'
                       : 'border-border bg-background/40 hover:bg-background',
@@ -327,14 +351,15 @@ export function BriefPanel({
                     </Badge>
                   </div>
                   <Textarea
-                    className="min-h-[120px] resize-y border-transparent bg-transparent text-xs leading-relaxed focus-visible:border-input focus-visible:bg-background"
+                    className="min-h-[120px] resize-y cursor-text border-transparent bg-transparent text-xs leading-relaxed focus-visible:border-input focus-visible:bg-background"
                     value={narrationOf(s)}
                     onClick={(e) => e.stopPropagation()}
+                    onFocus={() => setSelected(s.type)}
                     onChange={(e) =>
                       setEdited((v) => ({ ...v, [s.type]: e.target.value }))
                     }
                   />
-                </button>
+                </div>
               )
             })}
 

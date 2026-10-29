@@ -71,6 +71,20 @@ class _AsyncVideoBase(Provider):
 
     def __init__(self) -> None:
         self.api_key = os.environ.get(self.env_key, "")
+        # Optional observer: fn(dict) -> None, best-effort, never raises.
+        # The pipeline wires it to the web job so the UI can show what the
+        # vendor is actually doing (submitted chars, task id, poll status,
+        # received bytes) instead of a featureless spinner.
+        self.progress_cb = None
+
+    def _report(self, **info) -> None:
+        cb = getattr(self, "progress_cb", None)
+        if cb is None:
+            return
+        try:
+            cb({"provider": self.name, **info})
+        except Exception:  # noqa: BLE001 - progress must never kill a render
+            pass
 
     @property
     def model(self) -> str:
@@ -98,19 +112,34 @@ class _AsyncVideoBase(Provider):
         key = short_hash({"p": self.name, "m": self.model, "prompt": prompt, "style": style, "seed": seed, "sec": round(seconds, 2), "w": w, "h": h})
         hit = cache.get("video", key, ".mp4")
         if hit:
+            self._report(phase="cache")
             return VideoResult(path=hit, duration=seconds, cached=True, cost=Cost(self.name, "video", 0.0))
 
+        t0 = time.time()
+        self._report(phase="submitting", prompt_chars=len(prompt), model=self.model)
         job = self._submit(prompt, seconds, seed)
+        self._report(phase="submitted", task_id=str(job))
         url = self._poll(job)
+        self._report(phase="downloading", received_mb=0.0)
         tmp = cache.root / "video" / f"tmp_{os.getpid()}_{key}.mp4"
         tmp.parent.mkdir(parents=True, exist_ok=True)
+        received = 0
+        last_report = 0
         with requests.get(url, stream=True, timeout=300) as r:
             r.raise_for_status()
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
                     if chunk:
                         f.write(chunk)
+                        received += len(chunk)
+                        # Throttled: ~every 4 MiB, enough for a progress line
+                        # without flooding the websocket.
+                        if received - last_report >= (4 << 20):
+                            last_report = received
+                            self._report(phase="downloading", received_mb=round(received / 1e6, 1))
+        self._report(phase="downloaded", received_mb=round(received / 1e6, 1))
         final = cache.put("video", key, ".mp4", tmp)
+        self._report(phase="done_scene_asset", elapsed=round(time.time() - t0, 1))
         return VideoResult(path=final, duration=seconds, cached=False, cost=Cost(self.name, "video", self.price(seconds), seconds))
 
 
@@ -358,6 +387,7 @@ class MiniMaxVideo(_AsyncVideoBase):
         return str(task_id)
 
     def _poll(self, job_id: str, timeout: float = 900.0) -> str:
+        t0 = time.time()
         if self._use_v2:
             url = f"{self.host_root}/v2/query/video_generation?task_id={job_id}"
             deadline = time.time() + timeout
@@ -371,6 +401,8 @@ class MiniMaxVideo(_AsyncVideoBase):
                 item = next((x for x in items if str(x.get("id")) == str(job_id)), None)
                 if item is not None:
                     status = str(item.get("status", "")).lower()
+                    self._report(phase="generating", task_id=str(job_id),
+                                 status=status, elapsed=round(time.time() - t0, 1))
                     if status in ("succeeded", "success"):
                         url_out = (item.get("content") or {}).get("url")
                         if not url_out:
@@ -378,6 +410,9 @@ class MiniMaxVideo(_AsyncVideoBase):
                         return url_out
                     if status in ("failed", "fail"):
                         raise RuntimeError(f"MiniMax v2 generation failed: {item}")
+                else:
+                    self._report(phase="generating", task_id=str(job_id),
+                                 status="queued", elapsed=round(time.time() - t0, 1))
                 time.sleep(6)
             raise TimeoutError(f"MiniMax v2 job {job_id} timed out")
 
@@ -388,6 +423,8 @@ class MiniMaxVideo(_AsyncVideoBase):
             r.raise_for_status()
             d = r.json()
             status = str(d.get("status", "")).lower()
+            self._report(phase="generating", task_id=str(job_id),
+                         status=status or "queued", elapsed=round(time.time() - t0, 1))
             if status == "success":
                 file_id = d.get("file_id")
                 if not file_id:

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -107,6 +108,79 @@ def _update_job(job_id: str, **kw):
         asyncio.run_coroutine_threadsafe(_broadcast(job_id, snapshot), _main_loop)
     except RuntimeError:
         pass  # loop gone; pollers still see the state via /api/jobs/{id}
+
+
+# ---------------------------------------------------------------------------
+# Background generation jobs (scripts / plan)
+#
+# LLM script-writing and scene planning are single blocking calls that take
+# 10-60s. Handing the user a spinner with no feedback felt frozen; these wrap
+# the work in the same job machinery as renders, with a *smoothed* progress
+# ticker: real progress is unknowable inside one LLM call, so we creep toward
+# 92% and let the completing worker set the truth (100% or error). The
+# "fake" numbers only ever move forward and never claim completion early --
+# they exist to answer "is it still working?", not to mislead.
+# ---------------------------------------------------------------------------
+
+
+def _new_job(kind: str, message: str = "Job queued") -> str:
+    job_id = uuid.uuid4().hex[:12]
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "kind": kind,
+        "stage": "queued",
+        "progress": 0.02,
+        "message": message,
+        "done": False,
+        "error": None,
+        "video_url": None,
+        "cost": None,
+        "stats": None,
+        "result": None,
+    }
+    return job_id
+
+
+def _ticker(job_id: str, stop: threading.Event, phases: list[tuple[str, str]], cap: float = 0.92):
+    """Smooth progress + rotating phase messages while real work runs."""
+    t0 = time.time()
+    progress = 0.03
+    i = 0
+    while not stop.wait(2.0):
+        progress = min(cap, progress + (cap - progress) * 0.10 + 0.008)
+        phase, fallback = phases[min(i // 3, len(phases) - 1)]
+        _update_job(
+            job_id,
+            stage=phase,
+            progress=round(progress, 3),
+            message=fallback,
+            stats={"phase": phase, "elapsed": round(time.time() - t0, 1)},
+        )
+        i += 1
+
+
+def _finish_job(job_id: str, result: dict):
+    stop = _tickers.pop(job_id, None)
+    if stop:
+        stop.set()
+    _update_job(job_id, stage="done", progress=1.0, message="Complete",
+                done=True, result=result)
+
+
+def _fail_job(job_id: str, err: str):
+    stop = _tickers.pop(job_id, None)
+    if stop:
+        stop.set()
+    _update_job(job_id, stage="error", progress=0, done=True, error=err)
+
+
+_tickers: dict[str, threading.Event] = {}
+
+
+def _start_ticker(job_id: str, phases: list[tuple[str, str]]):
+    stop = threading.Event()
+    _tickers[job_id] = stop
+    threading.Thread(target=_ticker, args=(job_id, stop, phases), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -497,28 +571,41 @@ class ScriptsRequest(BaseModel):
 
 @app.post("/api/scripts")
 async def create_scripts(req: ScriptsRequest):
-    """Brief -> up to four ad-script variants. Free; no generation yet."""
+    """Brief -> up to four ad-script variants. Free; no generation yet.
+
+    Runs as a background job: LLM writing takes tens of seconds and the UI
+    wants a live progress panel, not a dead spinner.
+    """
     product = (req.product or "").strip()
     if not product and not req.selling_points:
         raise HTTPException(400, "请至少填写产品名称或卖点")
-    try:
-        drafts = generate_scripts(
-            product=product,
-            selling_points=req.selling_points,
-            style=req.style,
-            audience=req.audience,
-            tone=req.tone,
-            use_llm=req.use_llm,
-        )
-    except Exception as e:  # LLM path falls back internally; surface plainly
-        raise HTTPException(500, f"脚本生成失败：{e}") from e
-    return {
-        "brief": {
-            "product": product,
-            "style": req.style,
-        },
-        "scripts": [d.to_dict() for d in drafts],
-    }
+    params = req.model_dump()
+    job_id = _new_job("scripts")
+    _start_ticker(job_id, [
+        ("brief", "Reading product & selling points"),
+        ("drafting", "Drafting 4 script frameworks"),
+        ("polishing", "Polishing tone & hooks"),
+    ])
+
+    def _run():
+        try:
+            drafts = generate_scripts(
+                product=params.get("product", ""),
+                selling_points=params.get("selling_points"),
+                style=params.get("style", "dr_vsl"),
+                audience=params.get("audience"),
+                tone=params.get("tone"),
+                use_llm=params.get("use_llm", True),
+            )
+            _finish_job(job_id, {
+                "brief": {"product": product, "style": params.get("style", "dr_vsl")},
+                "scripts": [d.to_dict() for d in drafts],
+            })
+        except Exception as e:  # LLM path falls back internally; surface plainly
+            _fail_job(job_id, f"脚本生成失败：{e}")
+
+    asyncio.get_event_loop().run_in_executor(None, _run)
+    return {"job_id": job_id}
 
 
 class PlanScene(BaseModel):
@@ -612,37 +699,48 @@ def _apply_scene_overrides(project: object, overrides: list[dict]) -> int:
 
 @app.post("/api/plan")
 async def create_plan(req: PlanRequest):
-    """Script -> scenes. No TTS, no video, no spend."""
+    """Script -> scenes. No TTS, no video, no spend. Background job (see /api/scripts)."""
     script = (req.script or "").strip()
     if not script:
         raise HTTPException(400, "请先粘贴广告脚本")
-    try:
-        if req.use_llm:
-            project = parse_script_llm(script, name=req.name, style=req.style)
-        else:
-            project = parse_script(script, name=req.name, style=req.style)
-    except Exception as e:  # LLM/rule parse both fall back; surface it plainly
-        raise HTTPException(500, f"脚本解析失败：{e}") from e
+    params = req.model_dump()
+    job_id = _new_job("plan")
+    _start_ticker(job_id, [
+        ("parsing", "Splitting the script into scenes"),
+        ("cinema", "Assigning shot / angle / elements"),
+        ("polishing", "Polishing visual prompts"),
+    ])
 
-    if not getattr(project, "scenes", None):
-        raise HTTPException(400, "没能从脚本里解析出任何场景，请换一段文案试试")
+    def _run():
+        try:
+            if params.get("use_llm", True):
+                project = parse_script_llm(script, name=params["name"], style=params["style"])
+            else:
+                project = parse_script(script, name=params["name"], style=params["style"])
+            if not getattr(project, "scenes", None):
+                _fail_job(job_id, "没能从脚本里解析出任何场景，请换一段文案试试")
+                return
+            plan_id = uuid.uuid4().hex[:12]
+            _plans[plan_id] = {
+                "project": project,
+                "script": script,
+                "style": params["style"],
+                "name": params["name"],
+            }
+            # Also register under _projects so /api/edit can patch a plan that
+            # has been rendered under the same id (see /api/render).
+            _projects[plan_id] = project
+            _finish_job(job_id, {
+                "plan_id": plan_id,
+                "name": params["name"],
+                "style": params["style"],
+                "scenes": [_scene_view(s) for s in project.scenes],
+            })
+        except Exception as e:  # LLM/rule parse both fall back; surface it plainly
+            _fail_job(job_id, f"脚本解析失败：{e}")
 
-    plan_id = uuid.uuid4().hex[:12]
-    _plans[plan_id] = {
-        "project": project,
-        "script": script,
-        "style": req.style,
-        "name": req.name,
-    }
-    # Also register under _projects so /api/edit can patch a plan that has
-    # been rendered under the same id (see /api/render).
-    _projects[plan_id] = project
-    return {
-        "plan_id": plan_id,
-        "name": req.name,
-        "style": req.style,
-        "scenes": [_scene_view(s) for s in project.scenes],
-    }
+    asyncio.get_event_loop().run_in_executor(None, _run)
+    return {"job_id": job_id}
 
 
 @app.get("/api/plan/{plan_id}")
@@ -675,17 +773,7 @@ async def render(req: RenderRequest):
     if req.plan_id not in _plans:
         raise HTTPException(404, "Plan not found or expired, please re-run the script step")
 
-    job_id = uuid.uuid4().hex[:12]
-    _jobs[job_id] = {
-        "job_id": job_id,
-        "stage": "queued",
-        "progress": 0.0,
-        "message": "Job queued",
-        "done": False,
-        "error": None,
-        "video_url": None,
-        "cost": None,
-    }
+    job_id = _new_job("render")
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _run_render, job_id, req.model_dump())
     return {"job_id": job_id}
@@ -737,6 +825,37 @@ def _run_render(job_id: str, params: dict):
             target = None
         if target is not None:
             target = min(60.0, max(5.0, target))
+
+        # Live video progress: the pipeline stamps scene context onto every
+        # provider report (submit chars, vendor task id, poll status, received
+        # MB). Progress maps scene_index into the 0.30-0.95 band; scene_done
+        # events land exactly on their fraction so the bar only moves forward.
+        n_total = len(project.scenes)
+
+        def _video_progress(info: dict):
+            idx = int(info.get("scene_index") or 0)
+            phase = info.get("phase", "")
+            if phase == "scene_done":
+                frac = idx / max(1, n_total)
+                _update_job(job_id, stage="rendering",
+                            progress=round(0.30 + 0.65 * frac, 3),
+                            message=f"Scene {idx}/{n_total} done",
+                            stats={"phase": "scene_done", "scene_index": idx,
+                                   "scene_total": n_total, "cached": info.get("cached")})
+                return
+            # In-scene: stay at the scene's lower bound; the detail lives in
+            # stats for the UI to format.
+            frac = (idx - 1) / max(1, n_total) if idx > 1 else 0.0
+            stats = {"phase": phase}
+            for k in ("prompt_chars", "task_id", "status", "elapsed", "received_mb",
+                      "provider", "scene_index", "scene_total", "scene_id", "model"):
+                if info.get(k) is not None:
+                    stats[k] = info.get(k)
+            _update_job(job_id, stage="rendering",
+                        progress=round(0.30 + 0.65 * frac, 3),
+                        stats=stats)
+
+        pipe.video_progress_cb = _video_progress
         report = pipe.run(project, out_path, target_seconds=target)
 
         def _count(v):

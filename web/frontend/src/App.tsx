@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toaster, toast } from 'sonner'
-import { AlertTriangle, Send, Settings as SettingsIcon, Sparkles, Wand2 } from 'lucide-react'
+import { AlertTriangle, Send, Settings as SettingsIcon, Sparkles, Terminal, Wand2 } from 'lucide-react'
 import { Header } from '@/components/Header'
 import { ProviderSettings } from '@/components/ProviderSettings'
 import { ScriptPanel, type GeneratePayload } from '@/components/ScriptPanel'
@@ -13,10 +13,14 @@ import { PreviewCard } from '@/components/PreviewCard'
 import { EditPanel } from '@/components/EditPanel'
 import { PublishPanel } from '@/components/PublishPanel'
 import { LogPanel } from '@/components/LogPanel'
+import { TaskPanel, type ActiveTask, type TaskKind } from '@/components/TaskPanel'
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { useJob } from '@/hooks/useJob'
-import { api, errorText, toastError, type Job, type Plan, type PlanScene, type Settings } from '@/lib/api'
+import {
+  api, errorText, toastError, waitJob,
+  type Job, type Plan, type PlanScene, type ScriptDraft, type Settings,
+} from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 type Page = 'settings' | 'create'
@@ -30,8 +34,10 @@ export default function App() {
   // --- creation flow ----------------------------------------------------
   const [step, setStep] = useState<StepId>('script')
   const [plan, setPlan] = useState<Plan | null>(null)
-  const [planBusy, setPlanBusy] = useState(false)
+  const [hasScripts, setHasScripts] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
+  /** The generation task currently running (scripts / plan / render). */
+  const [task, setTask] = useState<ActiveTask | null>(null)
   /** Last payload used for step 1, so "re-parse" can redo it verbatim. */
   const [scriptPayload, setScriptPayload] = useState<GeneratePayload | null>(null)
 
@@ -50,6 +56,35 @@ export default function App() {
 
   const ready = Boolean(settings?.video.ready)
 
+  /**
+   * Run any generation job (scripts / plan / render) as a tracked task:
+   * start it, watch it for live progress, and await its final result.
+   * The TaskPanel reads `task` + `job` to render the progress UI.
+   */
+  const runJob = useCallback(
+    async <T,>(kind: TaskKind, start: () => Promise<{ job_id: string }>): Promise<T> => {
+      setTask({ kind, startedAt: Date.now() })
+      try {
+        const { job_id } = await start()
+        watch(job_id)
+        return await waitJob<T>(job_id)
+      } finally {
+        setTask(null)
+      }
+    },
+    [watch],
+  )
+
+  // ---- step 0: brief -> 4 ad scripts ------------------------------------
+  const runScripts = useCallback(
+    (payload: Parameters<typeof api.scripts>[0]) =>
+      runJob<{ brief: { product: string; style: string }; scripts: ScriptDraft[] }>(
+        'scripts',
+        () => api.scripts(payload),
+      ),
+    [runJob],
+  )
+
   // ---- step 1: script -> scene copy ------------------------------------
   const makePlan = async (p: GeneratePayload) => {
     if (!ready) {
@@ -58,14 +93,15 @@ export default function App() {
       return
     }
     setScriptPayload(p)
-    setPlanBusy(true)
     try {
-      const r = await api.plan({
-        script: p.script,
-        name: `web-${Date.now().toString(36)}`,
-        style: p.style,
-        use_llm: p.use_llm,
-      })
+      const r = await runJob<Plan>('plan', () =>
+        api.plan({
+          script: p.script,
+          name: `web-${Date.now().toString(36)}`,
+          style: p.style,
+          use_llm: p.use_llm,
+        }),
+      )
       setPlan(r)
       onLog(`> plan ${r.plan_id} · ${r.scenes.length} scenes`)
       setStep('confirm')
@@ -74,8 +110,6 @@ export default function App() {
       const msg = errorText(e)
       toast.error(msg)
       onLog(`ERROR: ${msg}`)
-    } finally {
-      setPlanBusy(false)
     }
   }
 
@@ -146,6 +180,12 @@ export default function App() {
   }, [job?.done, job?.error, jobId, plan])
 
   const finished: Job | null = job
+  // "Render done" must be a *render* job's completion — the plan job also
+  // finishes with done=true, and without the kind check the task panel
+  // showed a green check on "Video render" right after planning.
+  const hasVideo = Boolean(
+    jobId && finished?.done && !finished?.error && (finished.kind === 'render' || finished.video_url),
+  )
 
   return (
     <div className="relative min-h-screen bg-background">
@@ -244,7 +284,10 @@ export default function App() {
                   settings ? (
                     <BriefPanel
                       settings={settings}
-                      planBusy={planBusy}
+                      planBusy={task?.kind === 'plan'}
+                      scriptsBusy={task?.kind === 'scripts'}
+                      runScripts={runScripts}
+                      onScriptsReady={() => setHasScripts(true)}
                       onPlan={makePlan}
                     />
                   ) : (
@@ -257,7 +300,7 @@ export default function App() {
                 {step === 'confirm' && plan ? (
                   <SceneConfirm
                     scenes={plan.scenes}
-                    busy={running}
+                    busy={running || task !== null}
                     onBack={() => setStep('script')}
                     onReparse={reparse}
                     onConfirm={confirmScenes}
@@ -296,9 +339,17 @@ export default function App() {
               </div>
 
               {/* ------------------------------------------------- right */}
+              {/* Fixed layout: results + task progress always live here,
+                  regardless of which step the left column is showing. */}
               <div className="space-y-5">
-                {/* Nothing to preview until a render job exists — before
-                    that the placeholder was pure noise. */}
+                <TaskPanel
+                  active={task}
+                  job={job}
+                  hasScripts={hasScripts}
+                  hasPlan={Boolean(plan)}
+                  hasVideo={hasVideo}
+                />
+
                 {jobId ? <PreviewCard job={finished} /> : null}
 
                 {finished?.error ? (
@@ -308,9 +359,12 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <section className="rounded-xl border bg-card shadow-sm">
-                  <LogPanel lines={lines} />
-                </section>
+                <Panel>
+                  <PanelHeader title={t('log.tab')} icon={Terminal} />
+                  <PanelBody>
+                    <LogPanel lines={lines} />
+                  </PanelBody>
+                </Panel>
 
                 {jobId ? (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">

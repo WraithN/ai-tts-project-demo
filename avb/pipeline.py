@@ -133,6 +133,10 @@ class Pipeline:
         self.voice = build_voice_provider(self.config.voice.provider)
         self.video = build_video_provider(self.config.video.provider)
         self.music = SynthMusic()
+        # Optional observer for the web UI: fn(dict) -> None. Receives
+        # per-scene render progress plus everything the video provider
+        # reports (submit bytes, vendor task id, poll status, download MB).
+        self.video_progress_cb = None
 
         default_crf = self.config.render.draft_crf if draft else self.config.render.crf
         self.crf = crf if crf is not None else default_crf
@@ -158,9 +162,8 @@ class Pipeline:
     # -- assets ------------------------------------------------------------
     def synth(self, project: Project, only: set[str] | None = None) -> dict[str, SceneAssets]:
         out: dict[str, SceneAssets] = {}
-        for scene in project.scenes:
-            if only is not None and scene.id not in only:
-                continue
+        targets = [s for s in project.scenes if only is None or s.id in only]
+        for idx, scene in enumerate(targets):
             sd = self._scene_dir(project, scene)
 
             vo_path = sd / "vo.wav"
@@ -184,17 +187,35 @@ class Pipeline:
                 self.ledger.add(res.cost.provider, "voice", res.cost.usd, res.cost.units, res.cost.unit)
 
             bg_path = sd / "bg.png"
-            vres = self.video.generate(
-                prompt=scene.visual.prompt,
-                style=scene.visual.style or project.style,
-                seed=scene.visual.seed,
-                seconds=dur + TAIL_PAD,
-                w=project.width,
-                h=project.height,
-                cache=self.cache,
-            )
+            # Give the provider an observer that stamps scene context onto
+            # every report, then restore whatever was there before (defensive;
+            # the pipeline is single-threaded today but workers exist).
+            if self.video_progress_cb is not None:
+                def _scene_cb(info: dict, _i: int = idx, _sid: str = scene.id) -> None:
+                    self.video_progress_cb(
+                        {"scene_index": _i + 1, "scene_total": len(targets), "scene_id": _sid, **info}
+                    )
+                self.video.progress_cb = _scene_cb
+            try:
+                vres = self.video.generate(
+                    prompt=scene.visual.prompt,
+                    style=scene.visual.style or project.style,
+                    seed=scene.visual.seed,
+                    seconds=dur + TAIL_PAD,
+                    w=project.width,
+                    h=project.height,
+                    cache=self.cache,
+                )
+            finally:
+                self.video.progress_cb = None
             self._write_bg(vres.path, bg_path, project)
             self.ledger.add(vres.cost.provider, "video", vres.cost.usd, vres.cost.units, vres.cost.unit)
+            if self.video_progress_cb is not None:
+                self.video_progress_cb({
+                    "scene_index": idx + 1, "scene_total": len(targets),
+                    "scene_id": scene.id, "phase": "scene_done",
+                    "cached": vres.cached,
+                })
 
             out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
         return out

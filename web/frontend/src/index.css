@@ -72,6 +72,19 @@
   word-break: break-word;
 }
 
+/* Indeterminate progress: a soft brand sliver sweeping side to side. */
+.indeterminate-bar {
+  animation: indeterminate 1.6s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
 @layer components {
   /* Brand gradient surface (indigo -> violet -> pink). */
   .bg-brand {

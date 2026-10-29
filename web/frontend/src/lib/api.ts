@@ -51,8 +51,25 @@ export interface Settings {
   written?: { toml: string[]; env: string[] }
 }
 
+export interface JobStats {
+  phase?: string
+  elapsed?: number
+  prompt_chars?: number
+  task_id?: string
+  status?: string
+  received_mb?: number
+  provider?: string
+  model?: string
+  scene_index?: number
+  scene_total?: number
+  scene_id?: string
+  cached?: boolean
+  [k: string]: unknown
+}
+
 export interface Job {
   job_id: string
+  kind?: 'scripts' | 'plan' | 'render' | string
   stage: string
   progress: number
   message: string
@@ -66,6 +83,17 @@ export interface Job {
   scenes?: number
   rendered?: number
   reused?: number
+  /** Live detail for the task panel (submit bytes, vendor task id, ...). */
+  stats?: JobStats | null
+  /** Final payload for generation jobs (scripts / plan). */
+  result?: {
+    scripts?: ScriptDraft[]
+    brief?: { product: string; style: string }
+    plan_id?: string
+    name?: string
+    style?: string
+    scenes?: PlanScene[]
+  } | null
 }
 
 export interface PlanScene {
@@ -146,7 +174,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /** Top of the funnel: brief -> four competing ad-script concepts. */
+  /**
+   * Top of the funnel: brief -> four competing ad-script concepts.
+   * Runs as a background job; poll with waitJob() for the ScriptsResponse.
+   */
   scripts: (payload: {
     product: string
     selling_points: string[] | string
@@ -155,15 +186,18 @@ export const api = {
     tone?: string | null
     use_llm: boolean
   }) =>
-    json<ScriptsResponse>('/api/scripts', {
+    json<{ job_id: string }>('/api/scripts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
 
-  /** Step 1: script -> scenes. Free; nothing is generated yet. */
+  /**
+   * Step 1: script -> scenes. Free; nothing is generated yet.
+   * Background job; waitJob() resolves to the Plan.
+   */
   plan: (payload: { script: string; name: string; style: string; use_llm: boolean }) =>
-    json<Plan>('/api/plan', {
+    json<{ job_id: string }>('/api/plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -242,4 +276,26 @@ export function toastError(e: unknown) {
 /** Localised label for a stage id returned by the backend. */
 export function stageLabel(stage: string) {
   return i18n.t(`stage.${stage}`, { defaultValue: stage }) as string
+}
+
+/**
+ * Poll a generation job until it finishes; resolve with its `result`.
+ * The live view of the same job comes from useJob() (websocket); this is
+ * the promise-side counterpart so callers can `await` the payload.
+ */
+export async function waitJob<T>(jobId: string, intervalMs = 1000): Promise<T> {
+  for (;;) {
+    let j: Job
+    try {
+      j = await api.getJob(jobId)
+    } catch {
+      await new Promise((r) => setTimeout(r, intervalMs))
+      continue // transient network hiccup; keep waiting
+    }
+    if (j.done) {
+      if (j.error) throw new Error(j.error)
+      return (j.result ?? {}) as T
+    }
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
 }

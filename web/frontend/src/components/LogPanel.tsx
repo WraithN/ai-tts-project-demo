@@ -13,7 +13,7 @@ export function LogPanel({ lines }: { lines: string[] }) {
   return (
     <div
       ref={ref}
-      className="log-pane h-[280px] overflow-y-auto rounded-md bg-foreground/95 p-3 text-[11px] leading-relaxed text-background"
+      className="log-pane h-[240px] overflow-y-auto rounded-md border border-border/60 bg-muted/50 p-3 text-[11px] leading-relaxed text-foreground/75"
     >
       {lines.length ? lines.join('\n') : t('log.waiting')}
     </div>
