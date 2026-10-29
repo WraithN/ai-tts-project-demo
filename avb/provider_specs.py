@@ -124,7 +124,7 @@ VIDEO_SPECS: tuple[ProviderSpec, ...] = (
         ),
         model_env="MINIMAX_MODEL",
         console="https://platform.minimax.io",
-        notes="Strong on people and physics. Default host is the intl endpoint api.minimax.io — set MINIMAX_BASE_URL to https://api.minimaxi.com/v1 for a mainland account. H3 tiers: H3 (quality), H3-Highspeed (balanced), H3-Lite (cheap/batch).",
+        notes="Strong on people and physics. TWO things bite mainland (中国区) accounts: (1) the key is rejected by the intl host — set MINIMAX_BASE_URL=https://api.minimaxi.com/v1; (2) mainland accounts only expose the H3 (v2) models — the Hailuo/T2V-01 v1 models return 'system error'. So pick an H3 tier here (H3 quality / H3-Highspeed balanced / H3-Lite cheap). The adapter auto-routes H3* to the v2 API and everything else to v1.",
         aliases=("hailuo",),
     ),
     ProviderSpec(

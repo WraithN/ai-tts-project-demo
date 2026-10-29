@@ -14,6 +14,7 @@ orchestrator owns the queue; providers must stay pure.
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime
 from dataclasses import dataclass
@@ -91,7 +92,10 @@ class _AsyncVideoBase(Provider):
         raise NotImplementedError
 
     def generate(self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int, cache: Cache) -> VideoResult:
-        key = short_hash({"p": self.name, "prompt": prompt, "style": style, "seed": seed, "sec": round(seconds, 2), "w": w, "h": h})
+        # Include the model id: two MiniMax models (v1 Hailuo vs v2 H3) share
+        # `self.name` but produce different footage, so a key without the model
+        # would serve a stale clip when the user switches tiers.
+        key = short_hash({"p": self.name, "m": self.model, "prompt": prompt, "style": style, "seed": seed, "sec": round(seconds, 2), "w": w, "h": h})
         hit = cache.get("video", key, ".mp4")
         if hit:
             return VideoResult(path=hit, duration=seconds, cached=True, cost=Cost(self.name, "video", 0.0))
@@ -252,26 +256,28 @@ class BailianVideo(_AsyncVideoBase):
 
 
 class MiniMaxVideo(_AsyncVideoBase):
-    """MiniMax Hailuo (video-01 / Hailuo-02 / Hailuo-2.3).
+    """MiniMax Hailuo / H3 video generation.
 
-    Three steps, not two, and the third one is where the naive version of
-    this adapter broke:
+    MiniMax ships *two* incompatible video APIs under the same credentials:
 
-        POST /v1/video_generation                  -> task_id
-        GET  /v1/query/video_generation?task_id=..  -> status + file_id
-        GET  /v1/files/retrieve?file_id=..          -> {file:{download_url}}
+      v1  (Hailuo-02 / Hailuo-2.3 / T2V-01 / T2V-01-Director):
+          POST /v1/video_generation -> task_id
+          GET  /v1/query/video_generation?task_id= -> status + file_id
+          GET  /v1/files/retrieve?file_id=         -> {file:{download_url}}
 
-    `files/retrieve` answers *JSON pointing at* the mp4, not the mp4. Handing
-    that URL to the base class' downloader used to write a ~200 byte file of
-    JSON named .mp4, which then failed deep inside ffmpeg on the first scene.
-    So `_poll` resolves the download link itself and only then lets the base
-    class fetch bytes.
+      v2  (H3 / H3-Highspeed / H3-Lite):
+          POST /v2/video_generation -> task_id   (body uses `content`, not `prompt`)
+          GET  /v2/query/video_generation?task_id= -> items[]; the matching
+               item's `content.url` IS the mp4 (no separate retrieve step)
 
-    Two more vendor specifics:
-      - Host differs by account region: intl `api.minimax.io`, mainland
-        `api.minimaxi.com`. Override with MINIMAX_BASE_URL.
-      - duration is 6 or 10 only, and 1080P caps at 6s; 768P is the default
-        because it is the one combination that supports both.
+    The model id selects the API: anything starting with `MiniMax-H3` uses the
+    v2 shape; everything else uses v1. Both share the same host root, so the
+    only difference is the /v1 vs /v2 path segment.
+
+    Host differs by account region: intl `api.minimax.io`, mainland
+    `api.minimaxi.com`. Override the whole base with MINIMAX_BASE_URL. A
+    mainland account key is rejected by the intl host with "invalid api key",
+    which is the single commonest reason MiniMax "doesn't work".
     """
 
     name = "minimax-hailuo"
@@ -280,12 +286,20 @@ class MiniMaxVideo(_AsyncVideoBase):
     default_model = "MiniMax-Hailuo-02"
     price_per_sec = 0.045  # 768P list rate
     default_base = "https://api.minimax.io/v1"
+    # Model-id prefixes that live on the v2 API (different request/response shape).
+    _V2_PREFIXES = ("MiniMax-H3",)
 
     def __init__(self) -> None:
         self.api_key = os.environ.get(self.env_key, "")
         self.base = (os.environ.get("MINIMAX_BASE_URL", "") or self.default_base).rstrip("/")
+        # v2 hangs off the host root, not under /v1.
+        self.host_root = re.sub(r"/v\d+$", "", self.base)
         # Group-billed accounts need this; personal keys do not.
         self.group_id = os.environ.get("MINIMAX_GROUP_ID", "")
+
+    @property
+    def _use_v2(self) -> bool:
+        return any(self.model.startswith(p) for p in self._V2_PREFIXES)
 
     def _headers(self) -> dict[str, str]:
         h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
@@ -294,6 +308,33 @@ class MiniMaxVideo(_AsyncVideoBase):
         return h
 
     def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+        if self._use_v2:
+            # v2 uses `content` (OpenAI-style) not `prompt`, and requires both
+            # `ratio` and `resolution`. 1080P is rejected by H3-Lite, so 768P
+            # is the safe denominator.
+            payload = {
+                "model": self.model,
+                "content": [{"type": "text", "text": prompt}],
+                "ratio": "9:16",
+                "resolution": "768P",
+                "duration": 6 if seconds <= 6 else 10,
+            }
+            r = requests.post(
+                f"{self.host_root}/v2/video_generation", json=payload, headers=self._headers(), timeout=120
+            )
+            r.raise_for_status()
+            d = r.json()
+            # v2 success returns {task_id: ...} directly; errors are
+            # {"type":"error","error":{...}}.
+            if d.get("type") == "error":
+                raise RuntimeError(
+                    f"MiniMax submit failed: {(d.get('error') or {}).get('message', d)}"
+                )
+            task_id = d.get("task_id")
+            if not task_id:
+                raise RuntimeError(f"MiniMax returned no task_id: {d}")
+            return str(task_id)
+
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -317,6 +358,29 @@ class MiniMaxVideo(_AsyncVideoBase):
         return str(task_id)
 
     def _poll(self, job_id: str, timeout: float = 900.0) -> str:
+        if self._use_v2:
+            url = f"{self.host_root}/v2/query/video_generation?task_id={job_id}"
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                r = requests.get(url, headers=self._headers(), timeout=60)
+                r.raise_for_status()
+                items = r.json().get("items", [])
+                # The query returns a list (the task_id filter is not always
+                # honoured); find ours by id and keep polling if it is not on
+                # this page yet.
+                item = next((x for x in items if str(x.get("id")) == str(job_id)), None)
+                if item is not None:
+                    status = str(item.get("status", "")).lower()
+                    if status in ("succeeded", "success"):
+                        url_out = (item.get("content") or {}).get("url")
+                        if not url_out:
+                            raise RuntimeError(f"MiniMax v2 finished but returned no content.url: {item}")
+                        return url_out
+                    if status in ("failed", "fail"):
+                        raise RuntimeError(f"MiniMax v2 generation failed: {item}")
+                time.sleep(6)
+            raise TimeoutError(f"MiniMax v2 job {job_id} timed out")
+
         url = f"{self.base}/query/video_generation?task_id={job_id}"
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -337,7 +401,7 @@ class MiniMaxVideo(_AsyncVideoBase):
         raise TimeoutError(f"MiniMax job {job_id} timed out")
 
     def _retrieve(self, file_id: str) -> str:
-        """file_id -> the actual mp4 URL (the retrieve endpoint returns JSON)."""
+        """file_id -> the actual mp4 URL (v1 only; v2 carries the url directly)."""
         r = requests.get(
             f"{self.base}/files/retrieve?file_id={file_id}", headers=self._headers(), timeout=60
         )
