@@ -40,3 +40,4 @@ Thumbs.db
 
 # playwright-cli smoke artifacts
 web/frontend/.playwright-cli/
+web/frontend/flow.yaml
