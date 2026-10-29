@@ -28,6 +28,7 @@ export interface GeneratePayload {
   video_provider: string | null
   voice_provider: string | null
   target_seconds: number | null
+  reference_images?: string[]
 }
 
 export function ScriptPanel({

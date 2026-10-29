@@ -144,6 +144,7 @@ export default function App() {
         video_provider: p?.video_provider ?? null,
         voice_provider: p?.voice_provider ?? null,
         target_seconds: p?.target_seconds ?? null,
+        reference_images: p?.reference_images ?? [],
       })
       setJobId(r.job_id)
       onLog(`> confirmed ${scenes.length} scenes · job ${r.job_id}`)

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Clapperboard, Leaf, Loader2, Minus, Plus, Sparkles, ThumbsUp, Wand2, Zap } from 'lucide-react'
+import { Clapperboard, ImagePlus, Leaf, Loader2, Minus, Plus, Sparkles, ThumbsUp, Wand2, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,7 +14,7 @@ import {
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { cn } from '@/lib/utils'
-import { toastError, type ScriptDraft, type Settings } from '@/lib/api'
+import { api, toastError, type ScriptDraft, type Settings, type UploadedImage } from '@/lib/api'
 import { STYLES } from './ScriptPanel'
 
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -80,6 +80,7 @@ export function BriefPanel({
     video_provider: string | null
     voice_provider: string | null
     target_seconds: number | null
+    reference_images?: string[]
   }) => void
 }) {
   const { t } = useTranslation()
@@ -90,6 +91,33 @@ export function BriefPanel({
   const [tone, setTone] = useState('')
   const [useLlm, setUseLlm] = useState(true)
   const [targetSec, setTargetSec] = useState(30)
+
+  // Product three-view reference images. Purely additive: empty list = the
+  // old text-to-video behaviour, so nothing breaks if the user skips them.
+  const [refImages, setRefImages] = useState<UploadedImage[]>([])
+  const [uploading, setUploading] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const MAX_REFS = 9
+
+  const addRefImages = async (files: FileList | null) => {
+    if (!files?.length) return
+    const room = MAX_REFS - refImages.length
+    const picked = Array.from(files).slice(0, Math.max(0, room))
+    if (!picked.length) {
+      toastError(new Error(t('brief.refMax', { n: MAX_REFS })))
+      return
+    }
+    setUploading(true)
+    try {
+      const r = await api.uploadImages(picked)
+      setRefImages((v) => [...v, ...r.files].slice(0, MAX_REFS))
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setUploading(false)
+      if (fileInput.current) fileInput.current.value = ''
+    }
+  }
 
   const [videoOverride, setVideoOverride] = useState('__default__')
 
@@ -134,6 +162,7 @@ export function BriefPanel({
       video_provider: videoOverride === '__default__' ? null : videoOverride,
       voice_provider: null,
       target_seconds: targetSec,
+      reference_images: refImages.map((r) => r.path),
     })
   }
 
@@ -278,6 +307,55 @@ export function BriefPanel({
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">{t('brief.durationHint')}</p>
+        </div>
+
+        {/* Product reference images: three-view uploads that steer the
+            video provider (MiniMax H3 v2 reference-to-video). */}
+        <div className="space-y-1.5">
+          <Label className="text-xs">{t('brief.refTitle')}</Label>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+            multiple
+            hidden
+            onChange={(e) => void addRefImages(e.target.files)}
+          />
+          <div className="flex flex-wrap gap-2">
+            {refImages.map((img) => (
+              <div
+                key={img.path}
+                className="group relative h-16 w-16 overflow-hidden rounded-lg border bg-muted"
+              >
+                <img src={img.url} alt={img.name} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  aria-label={`remove ${img.name}`}
+                  onClick={() => setRefImages((v) => v.filter((r) => r.path !== img.path))}
+                  className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+            {refImages.length < MAX_REFS ? (
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                disabled={uploading}
+                className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                title={t('brief.refMax', { n: MAX_REFS })}
+              >
+                {uploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ImagePlus className="h-4 w-4" />
+                )}
+                <span className="text-[10px] leading-none">{t('brief.refAdd')}</span>
+              </button>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('brief.refHint')}</p>
         </div>
 
         <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">

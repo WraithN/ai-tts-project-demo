@@ -18,7 +18,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -57,6 +57,95 @@ DIST = STATIC / "dist"
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 if DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
+
+# ---------------------------------------------------------------------------
+# Product reference images (three-view uploads)
+# ---------------------------------------------------------------------------
+# Uploaded product photos that steer video generation (MiniMax H3 v2
+# reference-to-video keeps the product identity across scenes). Saved under
+# .avb_web/uploads and served back for thumbnail previews.
+UPLOAD_DIR = Path(".avb_web/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+# Vendor limits: MiniMax H3 v2 allows <= 9 reference images, each <= 30 MB,
+# body <= 64 MB total. 10 MB / 9 images keeps us far inside all three.
+MAX_UPLOADS = 9
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# job_id -> resolved reference image paths, so edit re-renders inherit them.
+_ref_images_by_job: dict[str, list[str]] = {}
+
+_ALLOWED_IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"BM", ".bmp"),
+)
+
+
+def _upload_ext(raw: bytes, fallback: str) -> str:
+    """Extension from magic bytes first, filename second (bg.png taught us
+    vendors and users alike hand over video bytes wearing an image name)."""
+    for magic, ext in _MAGIC:
+        if raw.startswith(magic):
+            return ext
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return ".webp"
+    return fallback if fallback in _ALLOWED_IMG_EXT else ""
+
+
+@app.post("/api/upload")
+async def upload_images(files: list[UploadFile] = File(...)):
+    """Store product reference images; returns {path, name, url} per file.
+
+    `path` is what the render request sends back; `url` is for the <img>
+    thumbnail. Magic-byte validated: anything that is not a real image
+    (e.g. a video renamed .png) is rejected here rather than detonating
+    three layers downstream.
+    """
+    if len(files) > MAX_UPLOADS:
+        raise HTTPException(400, f"一次最多上传 {MAX_UPLOADS} 张参考图")
+    out = []
+    for f in files:
+        raw = await f.read()
+        if len(raw) > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"{f.filename or 'image'} 超过 10MB 限制")
+        ext = _upload_ext(raw, (Path(f.filename or "").suffix or "").lower())
+        if not ext:
+            raise HTTPException(
+                400,
+                f"{f.filename or 'image'} 不是可识别的图片（支持 PNG/JPG/WEBP/GIF/BMP）",
+            )
+        name = f"{uuid.uuid4().hex[:12]}{ext}"
+        (UPLOAD_DIR / name).write_bytes(raw)
+        out.append({
+            "path": str(UPLOAD_DIR / name),
+            "name": f.filename or name,
+            "url": f"/api/uploads/{name}",
+            "size": len(raw),
+        })
+    return {"files": out}
+
+
+def _resolve_reference_images(paths: list[str]) -> list[str]:
+    """Keep only real image files that live inside UPLOAD_DIR.
+
+    The containment check matters: a forged reference path would otherwise
+    get base64-encoded straight into an outbound vendor request.
+    """
+    root = UPLOAD_DIR.resolve()
+    out = []
+    for p in paths or []:
+        try:
+            rp = Path(p).resolve()
+        except (OSError, ValueError):
+            continue
+        if rp.parent == root and rp.is_file() and rp.suffix.lower() in _ALLOWED_IMG_EXT:
+            out.append(str(rp))
+    return out
 
 # ---------------------------------------------------------------------------
 # Job manager
@@ -633,6 +722,9 @@ class RenderRequest(BaseModel):
     # Target total length in seconds. Scenes are scaled proportionally after
     # voice synthesis; VO/caption sync is untouched.
     target_seconds: float | None = None
+    # Product reference images (three-view set) uploaded via /api/upload.
+    # Steer video generation so every scene keeps the same product identity.
+    reference_images: list[str] = []
 
 
 def _scene_view(scene: object) -> dict:
@@ -856,7 +948,15 @@ def _run_render(job_id: str, params: dict):
                         stats=stats)
 
         pipe.video_progress_cb = _video_progress
-        report = pipe.run(project, out_path, target_seconds=target)
+        ref_images = _resolve_reference_images(params.get("reference_images") or [])
+        # Remember them so /api/edit re-renders keep steering generation with
+        # the same product images.
+        _ref_images_by_job[job_id] = ref_images
+        report = pipe.run(
+            project, out_path,
+            target_seconds=target,
+            reference_images=ref_images or None,
+        )
 
         def _count(v):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)
@@ -1086,7 +1186,9 @@ def _run_rerender(job_id: str, src_job_id: str | None, project: object,
 
         pipe = Pipeline(workdir=".avb_web", draft=draft, config=cfg)
         _projects[job_id] = project
-        report = pipe.run(project, path, only=only)
+        ref_images = _ref_images_by_job.get(src_job_id, [])
+        _ref_images_by_job[job_id] = ref_images
+        report = pipe.run(project, path, only=only, reference_images=ref_images or None)
 
         def _count(v):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)

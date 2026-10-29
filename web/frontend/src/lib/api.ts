@@ -123,6 +123,15 @@ export interface ScriptsResponse {
   scripts: ScriptDraft[]
 }
 
+export interface UploadedImage {
+  /** Absolute server path — send this back on /api/render. */
+  path: string
+  name: string
+  /** Static URL for the thumbnail preview. */
+  url: string
+  size: number
+}
+
 export interface Plan {
   plan_id: string
   name: string
@@ -205,6 +214,19 @@ export const api = {
 
   getPlan: (id: string) => json<Plan>(`/api/plan/${id}`),
 
+  /**
+   * Product reference images (three-view set) for image-guided video
+   * generation. Multipart upload; returns paths to attach to the render.
+   */
+  uploadImages: (files: File[]) => {
+    const fd = new FormData()
+    files.forEach((f) => fd.append('files', f))
+    return json<{ files: UploadedImage[] }>('/api/upload', {
+      method: 'POST',
+      body: fd,
+    })
+  },
+
   /** Step 3: render the confirmed scenes. This is the step that spends money. */
   render: (payload: {
     plan_id: string
@@ -216,6 +238,7 @@ export const api = {
     video_provider: string | null
     voice_provider: string | null
     target_seconds?: number | null
+    reference_images?: string[]
   }) =>
     json<{ job_id: string }>('/api/render', {
       method: 'POST',

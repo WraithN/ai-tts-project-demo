@@ -13,6 +13,8 @@ orchestrator owns the queue; providers must stay pure.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import re
 import time
@@ -29,7 +31,46 @@ __all__ = [
     "VeoVideo", "KlingVideo",
     "BailianVideo", "MiniMaxVideo", "ZhipuVideo", "JimengVideo", "SeedanceVideo",
     "VideoResult", "build_video_provider", "ProviderUnavailable",
+    "image_data_uri",
 ]
+
+_MAGIC_MIME = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+)
+
+
+def image_data_uri(path: str | Path) -> str:
+    """Local image file -> `data:<mime>;base64,...` for vendor APIs.
+
+    MiniMax H3 v2 accepts reference images as public URLs or base64 data
+    URIs; a local web app has no public host, so data URI it is (bodies stay
+    well under the 64 MB cap for a handful of product photos).
+    """
+    raw = Path(path).read_bytes()
+    mime = "image/webp"
+    for magic, m in _MAGIC_MIME:
+        if raw.startswith(magic):
+            mime = m
+            break
+    else:
+        if raw[:4] in (b"RIFF",) and raw[8:12] == b"WEBP":
+            mime = "image/webp"
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def _sniff_mime(path: str | Path) -> str:
+    """MIME type only (for APIs that split base64 from its content type)."""
+    raw = Path(path).read_bytes()[:12]
+    for magic, m in _MAGIC_MIME:
+        if raw.startswith(magic):
+            return m
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
 
 
 class ProviderUnavailable(RuntimeError):
@@ -63,6 +104,10 @@ class _AsyncVideoBase(Provider):
     price_per_sec = 0.10
     submit_url = ""
     env_key = ""
+    # Whether _submit can consume reference images. Providers that cannot
+    # (see subclasses) silently drop them, but the caller deserves a warning
+    # because "uploaded three views and got a text-only ad" looks like a bug.
+    supports_reference_images = False
     # Model revision: env override wins, class default otherwise. Vendors rev
     # these identifiers constantly, so a stale id is the commonest failure --
     # being able to set it without a code change is the point.
@@ -99,25 +144,52 @@ class _AsyncVideoBase(Provider):
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(
+        self, prompt: str, seconds: float, seed: int,
+        reference_images: list[Path] | None = None,
+    ) -> str:
+        """Submit one generation job, return the vendor task id.
+
+        `reference_images` are validated local paths (product three-views
+        etc.). Subclasses that support them consume them; the rest ignore.
+        """
         raise NotImplementedError
 
     def _poll(self, job_id: str, timeout: float = 600.0) -> str:
         raise NotImplementedError
 
-    def generate(self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int, cache: Cache) -> VideoResult:
+    def generate(
+        self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int,
+        cache: Cache, reference_images: list[Path] | None = None,
+    ) -> VideoResult:
+        refs = [Path(p) for p in (reference_images or []) if Path(p).is_file()]
         # Include the model id: two MiniMax models (v1 Hailuo vs v2 H3) share
         # `self.name` but produce different footage, so a key without the model
-        # would serve a stale clip when the user switches tiers.
-        key = short_hash({"p": self.name, "m": self.model, "prompt": prompt, "style": style, "seed": seed, "sec": round(seconds, 2), "w": w, "h": h})
+        # would serve a stale clip when the user switches tiers. Reference
+        # images hash their *bytes*: re-uploading a changed three-view set must
+        # invalidate the cache, but re-rendering the same images must not.
+        key = short_hash({
+            "p": self.name, "m": self.model, "prompt": prompt, "style": style,
+            "seed": seed, "sec": round(seconds, 2), "w": w, "h": h,
+            "refs": [
+                hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+                for p in refs
+            ] if refs else None,
+        })
         hit = cache.get("video", key, ".mp4")
         if hit:
             self._report(phase="cache")
             return VideoResult(path=hit, duration=seconds, cached=True, cost=Cost(self.name, "video", 0.0))
 
+        if refs and not self.supports_reference_images:
+            print(
+                f"  !! {self.name} does not support reference images; "
+                f"ignoring {len(refs)} uploaded image(s) (text-to-video only)"
+            )
         t0 = time.time()
-        self._report(phase="submitting", prompt_chars=len(prompt), model=self.model)
-        job = self._submit(prompt, seconds, seed)
+        self._report(phase="submitting", prompt_chars=len(prompt), model=self.model,
+                     ref_images=len(refs))
+        job = self._submit(prompt, seconds, seed, refs)
         self._report(phase="submitted", task_id=str(job))
         url = self._poll(job)
         self._report(phase="downloading", received_mb=0.0)
@@ -152,11 +224,13 @@ class VeoVideo(_AsyncVideoBase):
     price_per_sec = 0.40  # 1080p standard
     model_env = "VEO_MODEL"
     default_model = "veo-3.1-generate-001"
+    supports_reference_images = True  # first reference image = conditioning frame
     # The model id is part of the path, not the body -- so it is templated
     # per request rather than baked into `submit_url`.
     submit_url = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
         payload = {
             "instances": [{"prompt": prompt}],
             "parameters": {
@@ -166,6 +240,15 @@ class VeoVideo(_AsyncVideoBase):
                 "sampleCount": 1,
             },
         }
+        # Veo 3.1 image-to-video rides the same predictLongRunning endpoint:
+        # attach the first reference image as the conditioning frame.
+        if reference_images:
+            payload["instances"][0]["image"] = {
+                "bytesBase64Encoded": base64.b64encode(
+                    Path(reference_images[0]).read_bytes()
+                ).decode("ascii"),
+                "mimeType": _sniff_mime(reference_images[0]),
+            }
         url = f"{self.submit_url}/{self.model}:predictLongRunning?key={self.api_key}"
         r = requests.post(url, json=payload, timeout=120)
         r.raise_for_status()
@@ -194,7 +277,11 @@ class KlingVideo(_AsyncVideoBase):
     default_model = "kling-v3"
     submit_url = "https://api.klingai.com/v1/videos/text2video"
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
+        # Kling's image2video is a separate endpoint (/videos/image2video with
+        # its own poll path); until that adapter exists the text2video path
+        # stays reference-free (base class warns the user).
         payload = {
             "model_name": self.model,
             "prompt": prompt,
@@ -256,7 +343,8 @@ class BailianVideo(_AsyncVideoBase):
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
                 "X-DashScope-Async": "enable"}
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
         payload = {
             "model": self.model,
             "input": {"prompt": prompt},
@@ -315,6 +403,9 @@ class MiniMaxVideo(_AsyncVideoBase):
     default_model = "MiniMax-Hailuo-02"
     price_per_sec = 0.045  # 768P list rate
     default_base = "https://api.minimax.io/v1"
+    # v2 H3 supports reference-to-video (up to 9 role=reference_image items);
+    # v1 only takes a single first_frame_image.
+    supports_reference_images = True
     # Model-id prefixes that live on the v2 API (different request/response shape).
     _V2_PREFIXES = ("MiniMax-H3",)
 
@@ -336,14 +427,30 @@ class MiniMaxVideo(_AsyncVideoBase):
             h["GroupId"] = self.group_id
         return h
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
+        refs = [Path(p) for p in (reference_images or []) if Path(p).is_file()]
         if self._use_v2:
             # v2 uses `content` (OpenAI-style) not `prompt`, and requires both
             # `ratio` and `resolution`. 1080P is rejected by H3-Lite, so 768P
             # is the safe denominator.
+            #
+            # Reference-to-video: text + up to 9 reference_image items is how
+            # a product's three-view set keeps its identity across shots.
+            # first_frame/last_frame and reference_* are mutually exclusive,
+            # so uploaded images always go in as references, never as frames.
+            content: list[dict] = [{"type": "text", "text": prompt}]
+            content += [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_data_uri(p)},
+                    "role": "reference_image",
+                }
+                for p in refs[:9]
+            ]
             payload = {
                 "model": self.model,
-                "content": [{"type": "text", "text": prompt}],
+                "content": content,
                 "ratio": "9:16",
                 "resolution": "768P",
                 "duration": 6 if seconds <= 6 else 10,
@@ -375,6 +482,10 @@ class MiniMaxVideo(_AsyncVideoBase):
             # vendor rewrite them makes scene diffs non-deterministic.
             "prompt_optimizer": False,
         }
+        if refs:
+            # v1 has no reference-to-video mode; the best it can do is treat
+            # the first view as the opening frame.
+            payload["first_frame_image"] = image_data_uri(refs[0])
         r = requests.post(f"{self.base}/video_generation", json=payload, headers=self._headers(), timeout=120)
         r.raise_for_status()
         d = r.json()
@@ -465,7 +576,8 @@ class ZhipuVideo(_AsyncVideoBase):
     price_per_sec = 0.07
     submit_url = "https://open.bigmodel.cn/api/paas/v4/videos/generations"
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
         payload = {"model": self.model, "prompt": prompt}
         r = requests.post(self.submit_url, json=payload, headers=self._headers(), timeout=120)
         r.raise_for_status()
@@ -619,7 +731,8 @@ class JimengVideo(_AsyncVideoBase):
         r.raise_for_status()
         return r.json()
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
         payload = {
             "req_key": self.req_key,
             "prompt": prompt[:150],  # S2.0 Pro documents a 150-char cap
@@ -699,11 +812,20 @@ class SeedanceVideo(_AsyncVideoBase):
     default_model = "doubao-seedance-2-0-pro"
     price_per_sec = 0.05  # rough USD equivalent of token billing
     submit_url = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+    supports_reference_images = True  # first reference image = first frame
 
-    def _submit(self, prompt: str, seconds: float, seed: int) -> str:
+    def _submit(self, prompt: str, seconds: float, seed: int,
+                reference_images: list[Path] | None = None) -> str:
+        content: list[dict] = [{"type": "text", "text": prompt[:600]}]
+        if reference_images:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": image_data_uri(reference_images[0])},
+                "role": "first_frame",
+            })
         payload = {
             "model": self.model,
-            "content": [{"type": "text", "text": prompt[:600]}],
+            "content": content,
             "ratio": "9:16",  # vertical ad default
             "duration": int(max(2, min(12, seconds))),
             "watermark": False,

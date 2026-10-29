@@ -160,9 +160,17 @@ class Pipeline:
         return d
 
     # -- assets ------------------------------------------------------------
-    def synth(self, project: Project, only: set[str] | None = None) -> dict[str, SceneAssets]:
+    def synth(
+        self,
+        project: Project,
+        only: set[str] | None = None,
+        reference_images: list[str | Path] | None = None,
+    ) -> dict[str, SceneAssets]:
         out: dict[str, SceneAssets] = {}
         targets = [s for s in project.scenes if only is None or s.id in only]
+        # Product reference images (three-view set) ride along with every
+        # scene's video generation so the vendor keeps the product identity.
+        refs = [Path(p) for p in (reference_images or []) if Path(p).is_file()]
         for idx, scene in enumerate(targets):
             sd = self._scene_dir(project, scene)
 
@@ -205,6 +213,7 @@ class Pipeline:
                     w=project.width,
                     h=project.height,
                     cache=self.cache,
+                    reference_images=refs or None,
                 )
             finally:
                 self.video.progress_cb = None
@@ -477,6 +486,7 @@ class Pipeline:
         out: str | Path,
         only: set[str] | None = None,
         target_seconds: float | None = None,
+        reference_images: list[str | Path] | None = None,
     ) -> RunReport:
         t0 = time.time()
         out = Path(out)
@@ -486,7 +496,7 @@ class Pipeline:
         # into this one's report and the numbers stop meaning anything.
         self.ledger = CostLedger()
 
-        fresh = self.synth(project, only=only)
+        fresh = self.synth(project, only=only, reference_images=reference_images)
         assets = self.load_assets(project)
         # In-memory results are authoritative: on a cold run there is no
         # meta.json yet, and on a warm run we only re-synthesized `only`.

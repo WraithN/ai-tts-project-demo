@@ -1,0 +1,61 @@
+- generic [ref=e3]:
+  - region "Notifications alt+T"
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: AI Video Builder
+        - generic [ref=e12]: Script in · finished ad out · publish to TikTok
+      - generic [ref=e13]:
+        - generic [ref=e14]: not configured
+        - button "Language" [ref=e16] [cursor=pointer]
+        - 'button "Theme: Light" [ref=e17] [cursor=pointer]'
+  - navigation [ref=e18]:
+    - generic [ref=e19]:
+      - button "Create" [ref=e20] [cursor=pointer]
+      - button "Settings !" [ref=e23] [cursor=pointer]:
+        - text: Settings
+        - generic [ref=e27]: "!"
+  - main [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e35]:
+        - heading "Turn a product into a finished ad — without touching a timeline" [level=1] [ref=e36]
+        - paragraph [ref=e37]: Describe the product, pick one of four ad angles, tweak the storyboard shot-by-shot, then render and publish. Nothing is billed until you confirm the copy.
+      - list [ref=e39]:
+        - listitem [ref=e40]:
+          - button "Script 01" [ref=e41] [cursor=pointer]:
+            - generic [ref=e46]:
+              - generic [ref=e47]: Script
+              - generic [ref=e48]: "01"
+        - listitem [ref=e50]:
+          - button "Confirm copy 02" [disabled] [ref=e51]:
+            - generic [ref=e57]:
+              - generic [ref=e58]: Confirm copy
+              - generic [ref=e59]: "02"
+        - listitem [ref=e61]:
+          - button "Render 03" [disabled] [ref=e62]:
+            - generic [ref=e69]:
+              - generic [ref=e70]: Render
+              - generic [ref=e71]: "03"
+        - listitem [ref=e73]:
+          - button "Refine 04" [disabled] [ref=e74]:
+            - generic [ref=e79]:
+              - generic [ref=e80]: Refine
+              - generic [ref=e81]: "04"
+        - listitem [ref=e83]:
+          - button "Publish 05" [disabled] [ref=e84]:
+            - generic [ref=e89]:
+              - generic [ref=e90]: Publish
+              - generic [ref=e91]: "05"
+      - generic [ref=e92]:
+        - generic [ref=e93]: Loading settings…
+        - generic [ref=e95]:
+          - generic [ref=e96]:
+            - heading "Task progress" [level=2] [ref=e103]
+            - generic [ref=e104]:
+              - generic [ref=e105]: Ad scripts
+              - generic [ref=e112]: Scene copy
+              - generic [ref=e122]: Video render
+              - paragraph [ref=e129]: No task running
+          - generic [ref=e132]:
+            - heading "Run log" [level=2] [ref=e139]
+            - generic [ref=e140]: Waiting for a job…
