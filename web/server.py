@@ -887,6 +887,16 @@ def _run_render(job_id: str, params: dict):
             _update_job(job_id, stage="confirming", progress=0.08,
                          message=f"Applied {changed} edit(s) to the confirmed copy")
 
+        # Visual style is chosen at render time (confirm step), not in the
+        # brief: an explicit pick overrides the project default AND every
+        # per-scene style, because the user's choice is a whole-film intent.
+        # An empty/absent style keeps whatever the parser assigned.
+        chosen_style = (params.get("style") or "").strip()
+        if chosen_style:
+            project.style = chosen_style
+            for s in getattr(project, "scenes", []):
+                s.visual.style = chosen_style
+
         cfg = load_config()
         if params.get("video_provider"):
             cfg.video.provider = params["video_provider"]

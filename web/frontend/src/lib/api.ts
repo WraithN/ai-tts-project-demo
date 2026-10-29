@@ -190,7 +190,8 @@ export const api = {
   scripts: (payload: {
     product: string
     selling_points: string[] | string
-    style: string
+    /** Optional: scripts no longer bake in a visual style; it is picked at render time. */
+    style?: string
     audience?: string | null
     tone?: string | null
     use_llm: boolean

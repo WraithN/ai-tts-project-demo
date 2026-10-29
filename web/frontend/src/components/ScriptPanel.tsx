@@ -21,7 +21,8 @@ export const ASPECTS = ['9:16', '1:1', '4:5', '16:9']
 
 export interface GeneratePayload {
   script: string
-  style: string
+  /** Optional now: style is picked at the confirm/render step. */
+  style?: string
   aspect: string
   draft: boolean
   use_llm: boolean

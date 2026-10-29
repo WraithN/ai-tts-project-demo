@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Camera, Check, ClipboardCheck, Loader2, Pencil, RefreshCw, Video } from 'lucide-react'
+import { Camera, Check, ClipboardCheck, Clapperboard, Loader2, Pencil, RefreshCw, Video } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
-import type { PlanScene } from '@/lib/api'
+import type { PlanScene, Settings } from '@/lib/api'
+import { STYLES } from './ScriptPanel'
 import { cn } from '@/lib/utils'
 
 /**
@@ -15,23 +23,28 @@ import { cn } from '@/lib/utils'
  * Everything here is editable and nothing is rendered until the user hits
  * confirm. That is the point -- the model's first pass at scene copy is a
  * draft, and paying for eight clips before reading the hook is how you burn
- * a budget.
+ * a budget. Visual style and the video model also live here: they only
+ * matter at render time, so the brief step stays about the story.
  */
 export function SceneConfirm({
   scenes,
+  settings,
   busy,
   onBack,
   onReparse,
   onConfirm,
 }: {
   scenes: PlanScene[]
+  settings: Settings
   busy: boolean
   onBack: () => void
   onReparse: () => void
-  onConfirm: (scenes: PlanScene[]) => void
+  onConfirm: (scenes: PlanScene[], style: string, videoProvider: string | null) => void
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<PlanScene[]>(scenes)
+  const [style, setStyle] = useState('dr_vsl')
+  const [videoModel, setVideoModel] = useState('__default__')
 
   // Re-seed when a fresh plan arrives (re-parse, or a new script).
   useEffect(() => setDraft(scenes), [scenes])
@@ -181,6 +194,49 @@ export function SceneConfirm({
           ))}
         </div>
 
+        {/* Render-time picks: whole-film visual style + which video model
+            spends the money. Both only take effect on confirm. */}
+        <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+            <Clapperboard className="h-3.5 w-3.5 text-primary" />
+            {t('confirm.renderSetup')}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t('confirm.style')}</Label>
+              <Select value={style} onValueChange={setStyle}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STYLES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {t(`style.${s}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t('confirm.videoModel')}</Label>
+              <Select value={videoModel} onValueChange={setVideoModel}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">{t('confirm.videoModelDefault')}</SelectItem>
+                  {settings.video.specs.map((s) => (
+                    <SelectItem key={s.key} value={s.key}>
+                      {t(`vendor.${s.key}.label`, { defaultValue: s.label })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t('confirm.renderSetupHint')}</p>
+        </div>
+
         <div className="flex flex-col gap-2 pt-1 sm:flex-row">
           <Button variant="ghost" onClick={onBack} disabled={busy} className="sm:w-auto">
             {t('confirm.back')}
@@ -191,7 +247,7 @@ export function SceneConfirm({
           </Button>
           <Button
             className="bg-brand hover:opacity-90 sm:ml-auto sm:w-auto"
-            onClick={() => onConfirm(draft)}
+            onClick={() => onConfirm(draft, style, videoModel === '__default__' ? null : videoModel)}
             disabled={busy || draft.length === 0}
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}

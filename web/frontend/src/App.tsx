@@ -98,7 +98,7 @@ export default function App() {
         api.plan({
           script: p.script,
           name: `web-${Date.now().toString(36)}`,
-          style: p.style,
+          style: p.style ?? 'dr_vsl',
           use_llm: p.use_llm,
         }),
       )
@@ -118,7 +118,13 @@ export default function App() {
   }
 
   // ---- step 2 -> 3: confirm -> render (this is the step that spends) ----
-  const confirmScenes = async (scenes: PlanScene[]) => {
+  // Visual style + video model are picked in SceneConfirm at confirm time,
+  // not in the brief — they only matter once pixels start costing money.
+  const confirmScenes = async (
+    scenes: PlanScene[],
+    renderStyle: string,
+    videoProvider: string | null,
+  ) => {
     if (!plan) return
     if (!ready) {
       toast.error(t('errors.notConfigured'))
@@ -138,10 +144,10 @@ export default function App() {
           elements: s.elements,
         })),
         name: plan.name,
-        style: plan.style,
+        style: renderStyle || plan.style,
         aspect: p?.aspect ?? '9:16',
         draft: p?.draft ?? false,
-        video_provider: p?.video_provider ?? null,
+        video_provider: videoProvider ?? null,
         voice_provider: p?.voice_provider ?? null,
         target_seconds: p?.target_seconds ?? null,
         reference_images: p?.reference_images ?? [],
@@ -298,9 +304,10 @@ export default function App() {
                   )
                 ) : null}
 
-                {step === 'confirm' && plan ? (
+                {step === 'confirm' && plan && settings ? (
                   <SceneConfirm
                     scenes={plan.scenes}
+                    settings={settings}
                     busy={running || task !== null}
                     onBack={() => setStep('script')}
                     onReparse={reparse}

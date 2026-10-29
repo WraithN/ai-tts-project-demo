@@ -127,6 +127,12 @@ Rules:
   per line (separate lines with \\n).
 - Match the language of the brief; default to English if ambiguous.
 - Weave the product name and the listed selling points in naturally.
+- Write FOR the target audience: open inside their real situation or pain,
+  use the words they would use, and make the payoff matter to them. Do not
+  mention the audience label verbatim if it reads unnatural.
+- Hold the requested tone across every line (e.g. reassuring stays calm and
+  confident; playful gets light, punchy phrasing) without breaking the
+  framework's structure.
 - Every line must be speakable in under ~3 seconds.
 - Respect the requested visual style in tone (cinematic = restrained,
   dr_vsl = punchy, comic = playful).
@@ -161,7 +167,7 @@ def generate_scripts(
                 return _fill_order(drafts)
         except Exception:
             pass
-    return _generate_heuristic(product, points, style)
+    return _generate_heuristic(product, points, style, audience=audience, tone=tone)
 
 
 def _generate_llm(brief: str) -> list[ScriptDraft]:
@@ -228,16 +234,37 @@ def _bullet(points: list[str]) -> str:
     return "; ".join(points) if points else "its key benefit"
 
 
-def _generate_heuristic(product: str, points: list[str], style: str) -> list[ScriptDraft]:
+def _audience_line(audience: str | None) -> str:
+    """A hook line that names who this is for, or "" when unspecified.
+
+    Kept generic on purpose: it slots into any framework without assuming
+    a product category.
+    """
+    a = (audience or "").strip()
+    if not a:
+        return ""
+    return f"If you're {a}, this one's for you."
+
+
+def _generate_heuristic(product: str, points: list[str], style: str,
+                        audience: str | None = None, tone: str | None = None) -> list[ScriptDraft]:
     p = (product or "this product").strip()
     feats = _bullet(points)
     sp = points[0] if points else "the difference you can feel"
+    # The offline templates are fixed English copy, so "tone" can only steer
+    # small surface choices; the audience line is the one place a brief-only
+    # path can visibly personalise the script.
+    aud = _audience_line(audience)
+
+    def _aud(suffix: str) -> str:
+        return f"{aud}\n{suffix}" if aud else suffix
 
     return [
         ScriptDraft(
             type="pain_solution",
             title="Pain → Solution",
             narration=(
+                _aud(
                 f"Still dealing with the same problem every single day?\n"
                 f"Most solutions just mask it — they never fix what's underneath.\n"
                 f"That's exactly why {p} exists.\n"
@@ -246,7 +273,7 @@ def _generate_heuristic(product: str, points: list[str], style: str) -> list[Scr
                 f"Just {feats}.\n"
                 f"Thousands have already made the switch.\n"
                 f"Try {p} today — and feel the difference this week.\n"
-                f"Tap below before the launch price disappears."
+                f"Tap below before the launch price disappears.")
             ),
             rationale="Names the pain, reveals the mechanism, closes with the offer.",
         ),
@@ -254,6 +281,7 @@ def _generate_heuristic(product: str, points: list[str], style: str) -> list[Scr
             type="grass_planting",
             title="Grass-planting / Soft sell",
             narration=(
+                _aud(
                 f"Okay, I have to tell you about {p}.\n"
                 f"I've been using it for a while now and it's quietly become part of my routine.\n"
                 f"What I love is {sp}.\n"
@@ -261,7 +289,7 @@ def _generate_heuristic(product: str, points: list[str], style: str) -> list[Scr
                 f"And {feats} — without any fuss.\n"
                 f"No, it's not magic, but it actually delivers.\n"
                 f"If you've been on the fence, this is your sign.\n"
-                f"Link's right there if you want to see for yourself."
+                f"Link's right there if you want to see for yourself.")
             ),
             rationale="Warm first-person recommendation, UGC energy, soft close.",
         ),
@@ -269,6 +297,7 @@ def _generate_heuristic(product: str, points: list[str], style: str) -> list[Scr
             type="review_proof",
             title="Review / Proof",
             narration=(
+                _aud(
                 f"So I put {p} to the test — here's what actually happened.\n"
                 f"First, the claim: {sp}.\n"
                 f"I compared it against what I was using before.\n"
@@ -276,7 +305,7 @@ def _generate_heuristic(product: str, points: list[str], style: str) -> list[Scr
                 f"The proof is in the results: {feats}.\n"
                 f"I tracked it, and the numbers don't lie.\n"
                 f"If you want something that's actually backed up, this is it.\n"
-                f"Check the link to see the full breakdown."
+                f"Check the link to see the full breakdown.")
             ),
             rationale="Demonstration with proof and a before/after framing.",
         ),

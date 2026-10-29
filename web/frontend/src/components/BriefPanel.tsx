@@ -4,19 +4,10 @@ import { Clapperboard, ImagePlus, Leaf, Loader2, Minus, Plus, Sparkles, ThumbsUp
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import { cn } from '@/lib/utils'
 import { api, toastError, type ScriptDraft, type Settings, type UploadedImage } from '@/lib/api'
-import { STYLES } from './ScriptPanel'
-
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   pain_solution: Zap,
   grass_planting: Leaf,
@@ -42,6 +33,10 @@ const SAMPLES: { product: string; points: string }[] = [
   },
 ]
 
+/** Preset chips for tone / audience: click to fill, still free-form. */
+const TONE_PRESETS_KEY = 'brief.tonePresets'
+const AUDIENCE_PRESETS_KEY = 'brief.audiencePresets'
+
 /**
  * Step 1 (new): product brief -> four competing ad-script concepts.
  *
@@ -51,7 +46,6 @@ const SAMPLES: { product: string; points: string }[] = [
  * into the existing plan/confirm/render pipeline.
  */
 export function BriefPanel({
-  settings,
   planBusy,
   scriptsBusy,
   runScripts,
@@ -65,7 +59,7 @@ export function BriefPanel({
   runScripts: (payload: {
     product: string
     selling_points: string[] | string
-    style: string
+    style?: string
     audience: string | null
     tone: string | null
     use_llm: boolean
@@ -73,7 +67,7 @@ export function BriefPanel({
   onScriptsReady: () => void
   onPlan: (p: {
     script: string
-    style: string
+    style?: string
     aspect: string
     draft: boolean
     use_llm: boolean
@@ -86,7 +80,6 @@ export function BriefPanel({
   const { t } = useTranslation()
   const [product, setProduct] = useState('')
   const [points, setPoints] = useState('')
-  const [style, setStyle] = useState('dr_vsl')
   const [audience, setAudience] = useState('')
   const [tone, setTone] = useState('')
   const [useLlm, setUseLlm] = useState(true)
@@ -119,8 +112,6 @@ export function BriefPanel({
     }
   }
 
-  const [videoOverride, setVideoOverride] = useState('__default__')
-
   const [drafts, setDrafts] = useState<ScriptDraft[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [edited, setEdited] = useState<Record<string, string>>({})
@@ -134,7 +125,6 @@ export function BriefPanel({
       const r = await runScripts({
         product: product.trim(),
         selling_points: points,
-        style,
         audience: audience.trim() || null,
         tone: tone.trim() || null,
         use_llm: useLlm,
@@ -155,11 +145,12 @@ export function BriefPanel({
     if (!pick) return
     onPlan({
       script: narrationOf(pick).trim(),
-      style,
       aspect: '9:16',
       draft: false,
       use_llm: useLlm,
-      video_provider: videoOverride === '__default__' ? null : videoOverride,
+      // Style and video model are chosen at the confirm step now.
+      style: 'dr_vsl',
+      video_provider: null,
       voice_provider: null,
       target_seconds: targetSec,
       reference_images: refImages.map((r) => r.path),
@@ -209,19 +200,17 @@ export function BriefPanel({
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">{t('brief.style')}</Label>
-            <Select value={style} onValueChange={setStyle}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STYLES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {t(`style.${s}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label className="text-xs">{t('brief.audience')}</Label>
+            <Textarea
+              className="min-h-[40px] resize-none"
+              placeholder={t('brief.audiencePlaceholder')}
+              value={audience}
+              onChange={(e) => setAudience(e.target.value)}
+            />
+            <ChipRow
+              options={t(AUDIENCE_PRESETS_KEY, { returnObjects: true, defaultValue: [] }) as string[]}
+              onPick={setAudience}
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">{t('brief.tone')}</Label>
@@ -231,34 +220,10 @@ export function BriefPanel({
               value={tone}
               onChange={(e) => setTone(e.target.value)}
             />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t('brief.audience')}</Label>
-            <Textarea
-              className="min-h-[40px] resize-none"
-              placeholder={t('brief.audiencePlaceholder')}
-              value={audience}
-              onChange={(e) => setAudience(e.target.value)}
+            <ChipRow
+              options={t(TONE_PRESETS_KEY, { returnObjects: true, defaultValue: [] }) as string[]}
+              onPick={setTone}
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t('script.overrideVideo')}</Label>
-            <Select value={videoOverride} onValueChange={setVideoOverride}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__default__">{t('script.overrideVideoHint')}</SelectItem>
-                {settings.video.specs.map((s) => (
-                  <SelectItem key={s.key} value={s.key}>
-                    {t(`vendor.${s.key}.label`, { defaultValue: s.label })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </div>
 
@@ -453,5 +418,34 @@ export function BriefPanel({
         ) : null}
       </PanelBody>
     </Panel>
+  )
+}
+
+/**
+ * Preset suggestion chips under a free-form input. Clicking fills the input
+ * (replace, not append — a "tone" field with three stacked values is a bug,
+ * not a feature). The input itself stays authoritative for custom values.
+ */
+function ChipRow({
+  options,
+  onPick,
+}: {
+  options: string[]
+  onPick: (v: string) => void
+}) {
+  if (!Array.isArray(options) || options.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-0.5">
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          onClick={() => onPick(o)}
+          className="rounded-full border border-dashed border-muted-foreground/30 px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+        >
+          {o}
+        </button>
+      ))}
+    </div>
   )
 }
