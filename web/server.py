@@ -16,6 +16,7 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -41,14 +42,15 @@ from avb.provider_specs import (
 
 load_dotenv()
 
-app = FastAPI(title="AI Video Builder", version="0.3.0")
-
-
-@app.on_event("startup")
-async def _capture_loop():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """Remember the main loop so worker threads can schedule broadcasts."""
     global _main_loop
     _main_loop = asyncio.get_running_loop()
+    yield
+
+
+app = FastAPI(title="AI Video Builder", version="0.3.0", lifespan=lifespan)
 
 STATIC = Path(__file__).parent / "static"
 # React build output (web/frontend -> web/static/dist). If it is missing we
