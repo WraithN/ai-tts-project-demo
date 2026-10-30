@@ -123,10 +123,14 @@ class CostLedger:
 
     def __init__(self) -> None:
         self.items: list[Cost] = []
+        # Multiple synth() worker threads call add() concurrently; the list
+        # append must be serialized or items get dropped under load.
+        self._lock = threading.Lock()
 
     def add(self, provider: str, kind: str, usd: float, units: float = 0.0, unit: str = "sec") -> Cost:
         c = Cost(provider=provider, kind=kind, usd=round(float(usd), 6), units=round(float(units), 3), unit=unit)
-        self.items.append(c)
+        with self._lock:
+            self.items.append(c)
         return c
 
     def total(self) -> float:

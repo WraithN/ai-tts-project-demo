@@ -13,6 +13,7 @@ import json
 import sys
 import os
 import shutil
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -25,7 +26,7 @@ import numpy as np
 from .hashing import short_hash
 from .assets.base import Cache, CostLedger
 from .assets.music import SynthMusic, render_track, sfx
-from .assets.video import VideoGenError, build_video_provider, classify_video_error
+from .assets.video import VideoGenError, build_video_provider, classify_video_error, progress_scope
 from .assets.voice import ElevenLabsVoice, FormantVoice, build_voice_provider, speakable
 from .ir import Project, Scene
 from .config import Config
@@ -135,6 +136,11 @@ class Pipeline:
         self.ledger = CostLedger()
         self.draft = draft
         self.workers = int(workers) or int(self.config.render.workers)
+        # Cap simultaneous vendor submissions so a burst of scenes does not
+        # trip the provider's concurrency/rate limit. Distinct from
+        # self.workers (process-pool size for the CPU-bound compositing pass);
+        # this bounds the I/O-bound API fan-out during synth().
+        self.max_concurrent_api = max(1, min(self.workers or 4, 6))
 
         # Provider selection: explicit config wins; otherwise the best
         # available thing, because falling back matters more than picking
@@ -176,130 +182,199 @@ class Pipeline:
         reference_images: list[str | Path] | None = None,
         with_voice: bool = True,
     ) -> dict[str, SceneAssets]:
-        out: dict[str, SceneAssets] = {}
         targets = [s for s in project.scenes if only is None or s.id in only]
         # Scenes whose backdrop degraded to a solid colour because generation
         # failed after retries. Reset per call so a previous run cannot leak
         # stale warnings into this report. See RunReport.warnings.
         self.scene_warnings: list[dict] = []
-        # Set when an account-scope failure (out of balance, bad key, quota)
-        # hits. Every remaining scene would fail identically, so we skip their
-        # API calls and paint placeholders -- the caller still gets a complete
-        # video (voice + captions intact) instead of nothing at all.
-        account_halted = False
         # Product reference images (three-view set) ride along with every
         # scene's video generation so the vendor keeps the product identity.
         refs = [Path(p) for p in (reference_images or []) if Path(p).is_file()]
-        for idx, scene in enumerate(targets):
-            sd = self._scene_dir(project, scene)
 
-            vo_path = sd / "vo.wav"
-            words: list[dict] = []
-            dur = 0.0
-            if with_voice and scene.vo.text is not None:
-                # Unpronounceable lines ("" / "..." / "--") go to the offline
-                # synth, which renders a beat of silence. Every scene getting a
-                # real vo.wav on disk matters: load_assets() keys cache reuse
-                # off the file existing, so a missing one silently drops the
-                # scene.
-                speaker = self.voice if speakable(scene.vo.text) else FormantVoice()
-                res = speaker.synth(
-                    scene.vo.text,
-                    voice=scene.vo.voice,
-                    speed=scene.vo.speed,
-                    energy=scene.vo.energy,
-                    cache=self.cache,
+        out: dict[str, SceneAssets] = {}
+        out_lock = threading.Lock()
+        warn_lock = threading.Lock()
+        cb_lock = threading.Lock()
+        # Thread-safe account-halt flag. Set the moment any scene hits an
+        # account-scope failure (out of balance / bad key / quota). Scenes that
+        # have not yet started submitting will skip the API entirely; scenes
+        # already in flight are left to finish so the caller keeps whatever
+        # real footage they return -- a better outcome than the old serial
+        # "skip everything after the first failure".
+        account_halt = threading.Event()
+        # Bound simultaneous vendor submissions so a burst of scenes does not
+        # trip the provider's concurrency/rate limit.
+        api_sem = threading.Semaphore(max(1, self.max_concurrent_api))
+
+        def _emit(info: dict, idx: int, sid: str) -> None:
+            if self.video_progress_cb is None:
+                return
+            with cb_lock:
+                self.video_progress_cb(
+                    {"scene_index": idx + 1, "scene_total": len(targets),
+                     "scene_id": sid, **info}
                 )
-                shutil.copyfile(res.path, vo_path)
-                words, dur = res.words, res.duration
-                self.ledger.add(res.cost.provider, "voice", res.cost.usd, res.cost.units, res.cost.unit)
-            else:
-                # No voiceover requested: lay down a silent placeholder so the
-                # cache, segment reuse, and audio mux all stay consistent, and
-                # give the scene a default on-screen length instead of a 0.2s
-                # blink. Captions are word-driven, so with no words there is
-                # nothing to draw -- the renderer skips them anyway.
-                dur = NO_VOICE_CLIP
-                silent = np.zeros(int(NO_VOICE_CLIP * ffmpeg.SR), dtype=np.float32)
-                ffmpeg.write_wav(vo_path, silent)
 
+        def _work(scene: "Scene", idx: int) -> None:
+            sid = scene.id
+            sd = self._scene_dir(project, scene)
+            vo_path = sd / "vo.wav"
             bg_path = sd / "bg.png"
-            # Give the provider an observer that stamps scene context onto
-            # every report, then restore whatever was there before (defensive;
-            # the pipeline is single-threaded today but workers exist).
-            if self.video_progress_cb is not None:
-                def _scene_cb(info: dict, _i: int = idx, _sid: str = scene.id) -> None:
-                    self.video_progress_cb(
-                        {"scene_index": _i + 1, "scene_total": len(targets), "scene_id": _sid, **info}
-                    )
-                self.video.progress_cb = _scene_cb
+
+            # ③ Pipeline overlap: voiceover synthesis runs on a sub-thread so it
+            # never blocks the main (pool) thread. Two cases:
+            #   - If the script pinned scene.duration, we submit the video
+            #     first and the VO thread overlaps the long remote-video wait.
+            #   - If not pinned, we join the VO thread first to learn its
+            #     natural length (used to size the video request), but the work
+            #     still happened off the main path and overlaps sibling scenes'
+            #     video waits thanks to the pool. Either way VO writes only this
+            #     scene's vo_path and its ledger.add() is locked, so concurrent
+            #     sibling workers are safe. If the synth itself throws we fall
+            #     back to a silent clip so the scene still carries a vo.wav on
+            #     disk (the asset cache and the audio mux both expect one).
+            vo_box: dict = {}
+            vo_exc: dict = {}
+            def _run_vo() -> None:
+                try:
+                    vo_box["r"] = self._synth_vo(scene, vo_path, with_voice)
+                except Exception as e:  # noqa: BLE001
+                    vo_exc["e"] = e
+            vo_t = threading.Thread(target=_run_vo, name=f"vo-{sid}", daemon=True)
+            vo_t.start()
+
             try:
-                skipped_by_halt = account_halted
-                if account_halted:
-                    # Earlier scene hit an account-scope failure; calling the
-                    # API again would fail (and possibly bill) identically.
+                # Capture just before submitting: a scene whose turn arrives
+                # after the halt was raised must skip the pointless (and
+                # possibly billed) API call.
+                was_skipped = account_halt.is_set()
+                if was_skipped:
                     raise VideoGenError(
                         "skipped: account-level failure earlier in the run",
                         retryable=False, scope="account",
                     )
-                vres = self.video.generate(
-                    prompt=scene.visual.prompt,
-                    style=scene.visual.style or project.style,
-                    seed=scene.visual.seed,
-                    seconds=dur + TAIL_PAD,
-                    w=project.width,
-                    h=project.height,
-                    cache=self.cache,
-                    reference_images=refs or None,
-                )
+                # ① Video generation is the I/O-bound, vendor-GPU part and used
+                # to run serially. Fan it out across worker threads, gated by
+                # api_sem. The composer only consumes the clip's poster frame,
+                # so the requested length need not equal the VO length: when the
+                # script pinned a scene duration we use it (full overlap), else
+                # we wait for the VO thread to report the natural length first.
+                if scene.duration is not None:
+                    vid_seconds = float(scene.duration) + TAIL_PAD
+                else:
+                    vo_t.join()
+                    _w, _d = vo_box.get("r", (None, None))
+                    vid_seconds = (float(_d) if _d else NO_VOICE_CLIP) + TAIL_PAD
+                with api_sem, progress_scope(
+                    lambda info, _i=idx, _s=sid: _emit(info, _i, _s)
+                ):
+                    vres = self.video.generate(
+                        prompt=scene.visual.prompt,
+                        style=scene.visual.style or project.style,
+                        seed=scene.visual.seed,
+                        seconds=vid_seconds,
+                        w=project.width,
+                        h=project.height,
+                        cache=self.cache,
+                        reference_images=refs or None,
+                    )
+                self._write_bg(vres.path, bg_path, project)
+                self.ledger.add(vres.cost.provider, "video", vres.cost.usd,
+                                vres.cost.units, vres.cost.unit)
+                _emit({"phase": "scene_done", "cached": vres.cached}, idx, sid)
             except Exception as e:  # noqa: BLE001 - one bad shot must not kill the render
-                self.video.progress_cb = None
+                self._write_solid_bg(bg_path, project)
                 err = e if isinstance(e, VideoGenError) else classify_video_error(e)
                 if err.scope == "account":
-                    # Out of balance / bad key / quota: degrade this scene and
-                    # all remaining scenes to solid backdrops, but keep going
-                    # so the caller still gets a full-length video with voice
-                    # and captions. Retrying already happened inside
-                    # generate(); re-submitting would just re-burn money.
-                    account_halted = True
-                    print(f"[avb] scene {scene.id}: account-level failure ({err}); "
-                          f"degrading rest of run to placeholders", file=sys.stderr)
+                    # Out of balance / bad key / quota: stop submitting new
+                    # jobs but let in-flight ones finish (they may still land),
+                    # so the caller gets the most real footage possible.
+                    account_halt.set()
+                    print(f"[avb] scene {sid}: account-level failure ({err}); "
+                          f"halting further submissions", file=sys.stderr)
                 else:
                     # Scene-scoped failure (content policy, a prompt the vendor
                     # hates, retries exhausted on a flaky connection): keep the
-                    # render alive with a solid brand backdrop and tell the
-                    # caller which shot to redo once the cause is fixed.
-                    print(f"[avb] scene {scene.id}: video failed ({err}); "
+                    # render alive with a solid brand backdrop.
+                    print(f"[avb] scene {sid}: video failed ({err}); "
                           f"using solid backdrop", file=sys.stderr)
-                self._write_solid_bg(bg_path, project)
-                self.scene_warnings.append({
-                    "scene_id": scene.id,
-                    "index": idx + 1,
-                    "error": str(err)[:300],
-                    "scope": err.scope,
-                    "skipped": skipped_by_halt,
-                })
-                if self.video_progress_cb is not None:
-                    self.video_progress_cb({
-                        "scene_index": idx + 1, "scene_total": len(targets),
-                        "scene_id": scene.id, "phase": "scene_degraded",
-                        "error": str(err)[:200], "scope": err.scope,
+                with warn_lock:
+                    self.scene_warnings.append({
+                        "scene_id": sid,
+                        "index": idx + 1,
+                        "error": str(err)[:300],
+                        "scope": err.scope,
+                        "skipped": was_skipped,
                     })
-                out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
-                continue
-            finally:
-                self.video.progress_cb = None
-            self._write_bg(vres.path, bg_path, project)
-            self.ledger.add(vres.cost.provider, "video", vres.cost.usd, vres.cost.units, vres.cost.unit)
-            if self.video_progress_cb is not None:
-                self.video_progress_cb({
-                    "scene_index": idx + 1, "scene_total": len(targets),
-                    "scene_id": scene.id, "phase": "scene_done",
-                    "cached": vres.cached,
-                })
+                _emit({"phase": "scene_degraded", "error": str(err)[:200],
+                       "scope": err.scope}, idx, sid)
 
-            out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
+            # Resolve the VO outcome now that video is done (or skipped). The
+            # thread is already joined in the duration branch above, or finishes
+            # here; either way we read its result exactly once.
+            vo_t.join()
+            if "e" in vo_exc:
+                # Voiceover synthesis failed independently of the video: degrade
+                # to a silent placeholder so the scene keeps a vo.wav.
+                print(f"[avb] scene {sid}: voiceover failed ({vo_exc['e']}); "
+                      f"silent clip", file=sys.stderr)
+                dur = NO_VOICE_CLIP
+                silent = np.zeros(int(NO_VOICE_CLIP * ffmpeg.SR), dtype=np.float32)
+                ffmpeg.write_wav(vo_path, silent)
+                words: list[dict] = []
+            else:
+                words, dur = vo_box.get("r", ([], NO_VOICE_CLIP))
+            with out_lock:
+                out[sid] = SceneAssets(bg=bg_path, vo=vo_path,
+                                       vo_words=words, vo_duration=dur)
+
+        if self.workers <= 1 or len(targets) <= 1:
+            for idx, scene in enumerate(targets):
+                _work(scene, idx)
+        else:
+            n = max(1, min(self.workers, len(targets)))
+            with ThreadPoolExecutor(max_workers=n) as pool:
+                list(pool.map(lambda si: _work(si[1], si[0]), list(enumerate(targets))))
         return out
+
+    def _synth_vo(
+        self, scene: "Scene", vo_path: Path, with_voice: bool
+    ) -> tuple[list[dict], float]:
+        """Synthesize one scene's voiceover to vo_path. Returns (words, dur).
+
+        Thread-safe: the ledger.add() it calls is locked, and each scene writes
+        its own vo_path, so concurrent scenes never collide.
+        """
+        words: list[dict] = []
+        dur = 0.0
+        if with_voice and scene.vo.text is not None:
+            # Unpronounceable lines ("" / "..." / "--") go to the offline
+            # synth, which renders a beat of silence. Every scene getting a
+            # real vo.wav on disk matters: load_assets() keys cache reuse
+            # off the file existing, so a missing one silently drops the
+            # scene.
+            speaker = self.voice if speakable(scene.vo.text) else FormantVoice()
+            res = speaker.synth(
+                scene.vo.text,
+                voice=scene.vo.voice,
+                speed=scene.vo.speed,
+                energy=scene.vo.energy,
+                cache=self.cache,
+            )
+            shutil.copyfile(res.path, vo_path)
+            words, dur = res.words, res.duration
+            self.ledger.add(res.cost.provider, "voice", res.cost.usd,
+                            res.cost.units, res.cost.unit)
+        else:
+            # No voiceover requested: lay down a silent placeholder so the
+            # cache, segment reuse, and audio mux all stay consistent, and
+            # give the scene a default on-screen length instead of a 0.2s
+            # blink. Captions are word-driven, so with no words there is
+            # nothing to draw -- the renderer skips them anyway.
+            dur = NO_VOICE_CLIP
+            silent = np.zeros(int(NO_VOICE_CLIP * ffmpeg.SR), dtype=np.float32)
+            ffmpeg.write_wav(vo_path, silent)
+        return words, dur
 
     def _write_bg(self, src: Path, bg_path: Path, project: Project) -> None:
         """Guarantee bg_path is an image the compositor can open, come what may.

@@ -14,10 +14,12 @@ orchestrator owns the queue; providers must stay pure.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime
 from dataclasses import dataclass
@@ -215,20 +217,13 @@ class _AsyncVideoBase(Provider):
 
     def __init__(self) -> None:
         self.api_key = os.environ.get(self.env_key, "")
-        # Optional observer: fn(dict) -> None, best-effort, never raises.
-        # The pipeline wires it to the web job so the UI can show what the
-        # vendor is actually doing (submitted chars, task id, poll status,
-        # received bytes) instead of a featureless spinner.
-        self.progress_cb = None
 
     def _report(self, **info) -> None:
-        cb = getattr(self, "progress_cb", None)
-        if cb is None:
-            return
-        try:
-            cb({"provider": self.name, **info})
-        except Exception:  # noqa: BLE001 - progress must never kill a render
-            pass
+        # Thread-local progress (see report_progress / progress_scope below).
+        # generate() binds a per-call callback into thread-local state, so
+        # concurrent generate() calls on the same provider instance each report
+        # to their own observer instead of racing on a shared attribute.
+        report_progress(provider=self.name, **info)
 
     @property
     def model(self) -> str:
@@ -1099,3 +1094,41 @@ def build_video_provider(prefer: str | None = None) -> Provider:
         f"No video provider configured -- set at least one of: {env_list}",
         missing,
     )
+
+
+# ---------------------------------------------------------------------------
+# Thread-local progress plumbing
+# ---------------------------------------------------------------------------
+# generate() can run concurrently on several worker threads (one per scene in
+# Pipeline.synth). A shared self.progress_cb attribute would let scene B's
+# reports clobber scene A's observer, so the callback lives in thread-local
+# state for the duration of each generate() call instead.
+
+_tls = threading.local()
+
+
+@contextlib.contextmanager
+def progress_scope(cb):
+    """Temporarily bind the calling thread's progress callback for generate()."""
+    prev = getattr(_tls, "progress_cb", None)
+    _tls.progress_cb = cb
+    try:
+        yield
+    finally:
+        _tls.progress_cb = prev
+
+
+def report_progress(**info) -> None:
+    """Invoke the calling thread's bound progress callback, if any (best-effort).
+
+    The callback is stored in thread-local state by progress_scope, so concurrent
+    generate() calls each report to their own observer instead of racing on a
+    shared attribute.
+    """
+    cb = getattr(_tls, "progress_cb", None)
+    if cb is None:
+        return
+    try:
+        cb(info)
+    except Exception:  # noqa: BLE001 - progress must never kill a render
+        pass
