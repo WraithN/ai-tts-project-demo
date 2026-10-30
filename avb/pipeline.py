@@ -25,7 +25,7 @@ import numpy as np
 from .hashing import short_hash
 from .assets.base import Cache, CostLedger
 from .assets.music import SynthMusic, render_track, sfx
-from .assets.video import build_video_provider
+from .assets.video import VideoGenError, build_video_provider, classify_video_error
 from .assets.voice import ElevenLabsVoice, FormantVoice, build_voice_provider, speakable
 from .ir import Project, Scene
 from .config import Config
@@ -38,6 +38,11 @@ TAIL_PAD = 0.22
 # Bump whenever avb/render/*.py changes what a frame looks like. Baked into
 # the segment cache key so a compositor fix actually reaches the output.
 RENDER_VERSION = "3-caption-wrap"
+
+# When the user opts out of the voiceover, every scene still needs a sensible
+# on-screen duration and a silent placeholder so the asset cache (which keys
+# off a real vo.wav existing) keeps working across conversational edits.
+NO_VOICE_CLIP = 4.0
 
 # Magic bytes of image formats the compositor can open. Anything else copied
 # into bg.png (an mp4 from a vendor API, a truncated download, an error page)
@@ -94,6 +99,10 @@ class RunReport:
     scenes: list[SceneTiming]
     rendered: list[str] = field(default_factory=list)
     reused: list[str] = field(default_factory=list)
+    # Scenes that finished with a solid backdrop because video generation
+    # failed after retries. The video is still watchable; these shots just
+    # need re-running once the cause (balance, a flagged prompt) is fixed.
+    warnings: list[dict] = field(default_factory=list)
     cost_usd: float = 0.0
     cost_by_kind: dict[str, float] = field(default_factory=dict)
     cache_stats: dict[str, float] = field(default_factory=dict)
@@ -165,9 +174,19 @@ class Pipeline:
         project: Project,
         only: set[str] | None = None,
         reference_images: list[str | Path] | None = None,
+        with_voice: bool = True,
     ) -> dict[str, SceneAssets]:
         out: dict[str, SceneAssets] = {}
         targets = [s for s in project.scenes if only is None or s.id in only]
+        # Scenes whose backdrop degraded to a solid colour because generation
+        # failed after retries. Reset per call so a previous run cannot leak
+        # stale warnings into this report. See RunReport.warnings.
+        self.scene_warnings: list[dict] = []
+        # Set when an account-scope failure (out of balance, bad key, quota)
+        # hits. Every remaining scene would fail identically, so we skip their
+        # API calls and paint placeholders -- the caller still gets a complete
+        # video (voice + captions intact) instead of nothing at all.
+        account_halted = False
         # Product reference images (three-view set) ride along with every
         # scene's video generation so the vendor keeps the product identity.
         refs = [Path(p) for p in (reference_images or []) if Path(p).is_file()]
@@ -177,12 +196,13 @@ class Pipeline:
             vo_path = sd / "vo.wav"
             words: list[dict] = []
             dur = 0.0
-            # Unpronounceable lines ("" / "..." / "--") go to the offline
-            # synth, which renders a beat of silence. Every scene getting a
-            # real vo.wav on disk matters: load_assets() keys cache reuse off
-            # the file existing, so a missing one silently drops the scene.
-            speaker = self.voice if speakable(scene.vo.text) else FormantVoice()
-            if scene.vo.text is not None:
+            if with_voice and scene.vo.text is not None:
+                # Unpronounceable lines ("" / "..." / "--") go to the offline
+                # synth, which renders a beat of silence. Every scene getting a
+                # real vo.wav on disk matters: load_assets() keys cache reuse
+                # off the file existing, so a missing one silently drops the
+                # scene.
+                speaker = self.voice if speakable(scene.vo.text) else FormantVoice()
                 res = speaker.synth(
                     scene.vo.text,
                     voice=scene.vo.voice,
@@ -193,6 +213,15 @@ class Pipeline:
                 shutil.copyfile(res.path, vo_path)
                 words, dur = res.words, res.duration
                 self.ledger.add(res.cost.provider, "voice", res.cost.usd, res.cost.units, res.cost.unit)
+            else:
+                # No voiceover requested: lay down a silent placeholder so the
+                # cache, segment reuse, and audio mux all stay consistent, and
+                # give the scene a default on-screen length instead of a 0.2s
+                # blink. Captions are word-driven, so with no words there is
+                # nothing to draw -- the renderer skips them anyway.
+                dur = NO_VOICE_CLIP
+                silent = np.zeros(int(NO_VOICE_CLIP * ffmpeg.SR), dtype=np.float32)
+                ffmpeg.write_wav(vo_path, silent)
 
             bg_path = sd / "bg.png"
             # Give the provider an observer that stamps scene context onto
@@ -205,6 +234,14 @@ class Pipeline:
                     )
                 self.video.progress_cb = _scene_cb
             try:
+                skipped_by_halt = account_halted
+                if account_halted:
+                    # Earlier scene hit an account-scope failure; calling the
+                    # API again would fail (and possibly bill) identically.
+                    raise VideoGenError(
+                        "skipped: account-level failure earlier in the run",
+                        retryable=False, scope="account",
+                    )
                 vres = self.video.generate(
                     prompt=scene.visual.prompt,
                     style=scene.visual.style or project.style,
@@ -215,6 +252,41 @@ class Pipeline:
                     cache=self.cache,
                     reference_images=refs or None,
                 )
+            except Exception as e:  # noqa: BLE001 - one bad shot must not kill the render
+                self.video.progress_cb = None
+                err = e if isinstance(e, VideoGenError) else classify_video_error(e)
+                if err.scope == "account":
+                    # Out of balance / bad key / quota: degrade this scene and
+                    # all remaining scenes to solid backdrops, but keep going
+                    # so the caller still gets a full-length video with voice
+                    # and captions. Retrying already happened inside
+                    # generate(); re-submitting would just re-burn money.
+                    account_halted = True
+                    print(f"[avb] scene {scene.id}: account-level failure ({err}); "
+                          f"degrading rest of run to placeholders", file=sys.stderr)
+                else:
+                    # Scene-scoped failure (content policy, a prompt the vendor
+                    # hates, retries exhausted on a flaky connection): keep the
+                    # render alive with a solid brand backdrop and tell the
+                    # caller which shot to redo once the cause is fixed.
+                    print(f"[avb] scene {scene.id}: video failed ({err}); "
+                          f"using solid backdrop", file=sys.stderr)
+                self._write_solid_bg(bg_path, project)
+                self.scene_warnings.append({
+                    "scene_id": scene.id,
+                    "index": idx + 1,
+                    "error": str(err)[:300],
+                    "scope": err.scope,
+                    "skipped": skipped_by_halt,
+                })
+                if self.video_progress_cb is not None:
+                    self.video_progress_cb({
+                        "scene_index": idx + 1, "scene_total": len(targets),
+                        "scene_id": scene.id, "phase": "scene_degraded",
+                        "error": str(err)[:200], "scope": err.scope,
+                    })
+                out[scene.id] = SceneAssets(bg=bg_path, vo=vo_path, vo_words=words, vo_duration=dur)
+                continue
             finally:
                 self.video.progress_cb = None
             self._write_bg(vres.path, bg_path, project)
@@ -315,13 +387,14 @@ class Pipeline:
         *,
         global_start: float = 0.0,
         total: float = 1.0,
+        with_captions: bool = True,
     ) -> tuple[Path, bool]:
         """Render one scene to mp4. Returns (path, was_rendered)."""
         return _render_segment(
             project, scene, assets,
             global_start=global_start, total=total,
             draft=self.draft, crf=self.crf, preset=self.preset,
-            workdir=self.workdir,
+            workdir=self.workdir, with_captions=with_captions,
         )
 
     @staticmethod
@@ -357,7 +430,8 @@ class Pipeline:
         return timings, max(0.5, round(t, 4))
 
     def assemble(
-        self, project: Project, assets: dict[str, SceneAssets], out: Path
+        self, project: Project, assets: dict[str, SceneAssets], out: Path,
+        with_captions: bool = True,
     ) -> tuple[Path, list[SceneTiming], float, list[str], list[str]]:
         timings, total = self.plan_timeline(project, assets)
 
@@ -372,7 +446,7 @@ class Pipeline:
         def _one(sid: str) -> tuple[str, Path, bool]:
             return self.segment(
                 project, by_id[sid], assets[sid],
-                global_start=tmap[sid].start, total=total,
+                global_start=tmap[sid].start, total=total, with_captions=with_captions,
             )
 
         workers = self.workers if self.workers > 0 else min(8, max(2, (os.cpu_count() or 4)))
@@ -390,6 +464,7 @@ class Pipeline:
                             _segment_job, project, by_id[sid], assets[sid],
                             tmap[sid].start, total,
                             self.draft, self.crf, self.preset, self.workdir,
+                            with_captions,
                         ): sid
                         for sid in order
                     }
@@ -487,6 +562,8 @@ class Pipeline:
         only: set[str] | None = None,
         target_seconds: float | None = None,
         reference_images: list[str | Path] | None = None,
+        with_voice: bool = True,
+        with_captions: bool = True,
     ) -> RunReport:
         t0 = time.time()
         out = Path(out)
@@ -496,7 +573,7 @@ class Pipeline:
         # into this one's report and the numbers stop meaning anything.
         self.ledger = CostLedger()
 
-        fresh = self.synth(project, only=only, reference_images=reference_images)
+        fresh = self.synth(project, only=only, reference_images=reference_images, with_voice=with_voice)
         assets = self.load_assets(project)
         # In-memory results are authoritative: on a cold run there is no
         # meta.json yet, and on a warm run we only re-synthesized `only`.
@@ -507,7 +584,9 @@ class Pipeline:
         if target_seconds:
             self._apply_target_duration(project, assets, float(target_seconds))
 
-        video, timings, total, rendered, reused = self.assemble(project, assets, out)
+        video, timings, total, rendered, reused = self.assemble(
+            project, assets, out, with_captions=with_captions
+        )
 
         # Attribute render compute. Remotion bills $0.01/render; self-hosted
         # lands in the same ballpark once you amortise the box.
@@ -528,6 +607,7 @@ class Pipeline:
             cost_by_kind=self.ledger.by_kind(),
             cache_stats=self.cache.stats(),
             qc=qc,
+            warnings=list(getattr(self, "scene_warnings", []) or []),
             wall_seconds=round(time.time() - t0, 2),
         )
 
@@ -564,12 +644,14 @@ def _render_segment(
     crf: int,
     preset: str,
     workdir: str | Path,
+    with_captions: bool = True,
 ) -> tuple[Path, bool]:
     """Render one scene to mp4. Returns (path, was_rendered)."""
     # RENDER_VERSION is in the key on purpose. The segment cache is keyed
     # on scene semantics; changing the compositor without bumping it
     # silently reuses stale frames, which is exactly how a caption fix
-    # ends up "not working".
+    # ends up "not working". `cap` lets toggling captions on/off invalidate
+    # the cached frames instead of reusing stale ones.
     key = short_hash({
         **scene.semantic(),
         "dur": scene.duration,
@@ -577,6 +659,14 @@ def _render_segment(
         "h": project.height,
         "fps": project.fps,
         "render": RENDER_VERSION,
+        "cap": 1 if with_captions else 0,
+        # Hash the actual backdrop bytes. Normally this is stable (same
+        # inputs -> same cached clip -> same poster frame), but when video
+        # generation degraded to a solid placeholder it MUST NOT be reused
+        # later as if it were the real shot -- without this the first
+        # successful re-render after a top-up would be silently discarded in
+        # favour of the cached placeholder segment.
+        "bg": short_hash({"n": assets.bg.stat().st_size}) if assets.bg and assets.bg.is_file() else None,
     })
     seg_dir = Path(workdir) / "projects" / project.id / "segments"
     seg_dir.mkdir(parents=True, exist_ok=True)
@@ -596,6 +686,7 @@ def _render_segment(
         global_start=global_start,
         total=total,
         draft=draft,
+        with_captions=with_captions,
     )
     tmp = out.with_suffix(".tmp.mp4")
     ffmpeg.encode_segment(

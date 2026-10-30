@@ -187,7 +187,7 @@ const en: typeof zh = {
     audiencePlaceholder: 'e.g. new parents, night-shift workers (or type your own)',
     audiencePresets: ['new parents', 'office workers', 'students', 'fitness fans', 'pet owners', 'seniors'],
     duration: 'Video length',
-    durationHint: 'Target total length, 10–60s (±5 per step). Scenes are stretched to fit; voice and captions stay in sync.',
+    durationHint: 'Target total length, 5–60s (±5 per step). Scenes are stretched to fit; voice and captions stay in sync.',
     refTitle: 'Product reference images (optional)',
     refHint: 'Upload the product three-view set (front / side / back) so AI video keeps a consistent product look across every shot. Up to 9 images.',
     refAdd: 'Add images',
@@ -234,6 +234,11 @@ const en: typeof zh = {
     style: 'Visual style',
     videoModel: 'Video model',
     videoModelDefault: 'Use default saved in Settings',
+    voice: 'Voiceover',
+    voiceHint: 'Generate an AI narration (TTS); off = silent clips',
+    captions: 'Captions',
+    captionsHint: 'Burned-in kinetic subtitles, word-by-word with the VO',
+    captionsLocked: 'Captions require the voiceover',
     planned: '{{n}} scenes drafted — confirm to render',
   },
 
@@ -273,6 +278,11 @@ const en: typeof zh = {
     scenes: 'scenes',
     rendered: 'rendered {{n}} · reused {{m}}',
     reusedHint: 'The reuse count is the proof that "change one line" is not a full rebuild',
+    degraded: '{{n}} scene(s) failed to generate and were replaced with a solid backdrop',
+    degradedHint: 'The video is still previewable and exportable; re-render those scenes once the issue is fixed',
+    degradedAccount: 'Account-level issue (balance/quota) — {{n}} scene(s) use placeholder backdrops',
+    degradedAccountHint: 'The video is still complete (voice & captions unaffected); top up or fix the API key, then re-render to fill in the visuals',
+    sceneSkipped: 'Skipped due to account-level failure',
   },
 
   edit: {

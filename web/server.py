@@ -76,6 +76,10 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # job_id -> resolved reference image paths, so edit re-renders inherit them.
 _ref_images_by_job: dict[str, list[str]] = {}
 
+# job_id -> render flags (voice/captions), so conversational edit re-renders
+# inherit the same audio/text layers the user last picked.
+_render_flags_by_job: dict[str, dict] = {}
+
 _ALLOWED_IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _MAGIC = (
     (b"\x89PNG\r\n\x1a\n", ".png"),
@@ -725,6 +729,11 @@ class RenderRequest(BaseModel):
     # Product reference images (three-view set) uploaded via /api/upload.
     # Steer video generation so every scene keeps the same product identity.
     reference_images: list[str] = []
+    # Optional audio/text layers. Off by default would be unusual, but the
+    # UI lets the user skip the voiceover (silent clips) and/or the kinetic
+    # captions (burned-in subtitles) per render.
+    with_voice: bool = True
+    with_captions: bool = True
 
 
 def _scene_view(scene: object) -> dict:
@@ -962,10 +971,20 @@ def _run_render(job_id: str, params: dict):
         # Remember them so /api/edit re-renders keep steering generation with
         # the same product images.
         _ref_images_by_job[job_id] = ref_images
+        # Captions are only meaningful with a voiceover; guard against a
+        # client sending captions-on + voice-off.
+        want_voice = bool(params.get("with_voice", True))
+        want_captions = bool(params.get("with_captions", True)) and want_voice
+        _render_flags_by_job[job_id] = {
+            "with_voice": want_voice,
+            "with_captions": want_captions,
+        }
         report = pipe.run(
             project, out_path,
             target_seconds=target,
             reference_images=ref_images or None,
+            with_voice=want_voice,
+            with_captions=want_captions,
         )
 
         def _count(v):
@@ -979,7 +998,8 @@ def _run_render(job_id: str, params: dict):
                      total_duration=getattr(report, "total_duration", 0.0),
                      scenes=_count(getattr(report, "scenes", 0)),
                      rendered=_count(getattr(report, "rendered", 0)),
-                     reused=_count(getattr(report, "reused", 0)))
+                     reused=_count(getattr(report, "reused", 0)),
+                     warnings=list(getattr(report, "warnings", []) or []))
     except Exception as e:
         _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
 
@@ -1069,7 +1089,8 @@ def _run_pipeline(job_id: str, params: dict):
                      total_duration=getattr(report, "total_duration", 0.0),
                      scenes=_count(getattr(report, "scenes", 0)),
                      rendered=_count(getattr(report, "rendered", 0)),
-                     reused=_count(getattr(report, "reused", 0)))
+                     reused=_count(getattr(report, "reused", 0)),
+                     warnings=list(getattr(report, "warnings", []) or []))
 
     except Exception as e:
         _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
@@ -1198,7 +1219,19 @@ def _run_rerender(job_id: str, src_job_id: str | None, project: object,
         _projects[job_id] = project
         ref_images = _ref_images_by_job.get(src_job_id, [])
         _ref_images_by_job[job_id] = ref_images
-        report = pipe.run(project, path, only=only, reference_images=ref_images or None)
+        # Inherit the voiceover/caption choice from the render this edit
+        # branched off of, so a no-voice edit doesn't suddenly grow a VO.
+        flags = _render_flags_by_job.get(src_job_id, {})
+        want_voice = bool(flags.get("with_voice", True))
+        want_captions = bool(flags.get("with_captions", True)) and want_voice
+        _render_flags_by_job[job_id] = {
+            "with_voice": want_voice,
+            "with_captions": want_captions,
+        }
+        report = pipe.run(
+            project, path, only=only, reference_images=ref_images or None,
+            with_voice=want_voice, with_captions=want_captions,
+        )
 
         def _count(v):
             return len(v) if isinstance(v, (list, tuple)) else (v or 0)
@@ -1210,7 +1243,8 @@ def _run_rerender(job_id: str, src_job_id: str | None, project: object,
                      total_duration=getattr(report, "total_duration", 0.0),
                      scenes=_count(getattr(report, "scenes", 0)),
                      rendered=_count(getattr(report, "rendered", 0)),
-                     reused=_count(getattr(report, "reused", 0)))
+                     reused=_count(getattr(report, "reused", 0)),
+                     warnings=list(getattr(report, "warnings", []) or []))
     except Exception as e:
         _update_job(job_id, stage="error", progress=0, done=True, error=str(e))
 

@@ -276,10 +276,50 @@ def test_minimax_poll_resolves_download_url(monkeypatch):
 
     monkeypatch.setattr(vmod.requests, "get", fake_get)
     monkeypatch.setenv("MINIMAX_API_KEY", "mm-test")
+    # Pin the v1 API shape: a stray MINIMAX_MODEL=MiniMax-H3-* in the
+    # environment (e.g. loaded from .env) would flip _use_v2 and send this
+    # test down the v2 branch, where the v1-shaped fake never matches and
+    # _poll spins until its deadline.
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-Hailuo-02")
     v = MiniMaxVideo()
 
     assert v._poll("task-1") == "https://cdn.example/clip.mp4"
     assert any("files/retrieve?file_id=998877" in u for u in seen)
+
+
+def test_minimax_v2_poll_resolves_content_url(monkeypatch):
+    """v2: GET /v2/query/video_generation -> items[] whose content.url is the mp4.
+
+    The v2 shape has no files/retrieve step at all; the poll result carries
+    the URL directly. This is the MiniMax-H3-* path.
+    """
+    import avb.assets.video as vmod
+    from avb.assets.video import MiniMaxVideo
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **_kw):
+        assert "/v2/query/video_generation" in url, url
+        return _Resp({"items": [
+            {"id": "other", "status": "processing"},
+            {"id": "task-2", "status": "succeeded",
+             "content": {"url": "https://cdn.example/v2clip.mp4"}},
+        ]})
+
+    monkeypatch.setattr(vmod.requests, "get", fake_get)
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-test")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-H3-Lite")
+    v = MiniMaxVideo()
+
+    assert v._poll("task-2") == "https://cdn.example/v2clip.mp4"
 
 
 def test_write_env_preserves_comments(tmp_path):

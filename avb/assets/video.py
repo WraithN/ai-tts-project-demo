@@ -17,6 +17,7 @@ import base64
 import hashlib
 import os
 import re
+import sys
 import time
 from datetime import datetime
 from dataclasses import dataclass
@@ -83,6 +84,104 @@ class ProviderUnavailable(RuntimeError):
     def __init__(self, message: str, missing: dict[str, tuple[str, ...]] | None = None):
         super().__init__(message)
         self.missing = missing or {}
+
+
+# --- Failure classification -------------------------------------------------
+#
+# A generation call can fail in ways that need opposite handling. Burning a
+# retry on "insufficient balance" wastes minutes and produces the same error;
+# giving up immediately on a 503 throws away a render that would have
+# succeeded eight seconds later. So every failure is sorted into one of three
+# buckets before anyone decides what to do with it.
+
+# Will never succeed on retry: the account is out of money, the key is wrong,
+# the request itself is unacceptable. Surface at once and tell the human to
+# change something outside the code.
+_ACCOUNT_MARKERS = (
+    "insufficient balance", "insufficient_balance", "balance",
+    "quota", "exceeded", "unauthorized", "forbidden",
+    "invalid api key", "invalid_api_key", "api key", "authentication",
+    "permission", "billing", "payment", "access denied", "1008",
+)
+
+# The request was rejected for something about *this* prompt/image -- other
+# scenes are unaffected, so the run should continue with a placeholder.
+_SCENE_MARKERS = (
+    "content policy", "content_policy", "sensitive", "moderation",
+    "flagged", "invalid request", "invalid_request", "invalid parameter",
+    "invalid_param", "parameter", "unsupported", "too long", "not found",
+)
+
+# Worth trying again: transport hiccups and vendor-side load. Everything not
+# clearly marked permanent lands here too -- a one-off blip should not kill a
+# render, and a genuinely broken account still surfaces after the retries.
+_TRANSIENT_MARKERS = (
+    "timeout", "timed out", "rate limit", "rate_limit", "too many request",
+    "busy", "unavailable", "try again", "retry", "internal error",
+    "internal_error", "overload", "server error", "server_error",
+    "temporarily", "connection", "reset by peer", "deadline",
+    "429", "500", "502", "503", "504",
+)
+
+# Rate limiting is transient even though vendor phrasing ("rate limit
+# exceeded") borrows words from the account list below. Checked before the
+# account markers so a 429 stays retryable instead of aborting the run.
+_RATELIMIT_MARKERS = (
+    "rate limit", "rate_limit", "too many request", "429", "throttl",
+)
+
+
+class VideoGenError(RuntimeError):
+    """A vendor failure, tagged with how the pipeline should react to it.
+
+    `retryable` -- automatic retry could plausibly help.
+    `scope` -- "account" aborts the whole run (every scene would fail the
+    same way); "scene" lets the pipeline fall back to a placeholder backdrop
+    for this one shot and keep rendering the rest.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        scope: str = "scene",
+        code: str | None = None,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.scope = scope
+        self.code = code
+
+
+def classify_video_error(exc: BaseException) -> VideoGenError:
+    """Sort an arbitrary provider failure into the buckets above.
+
+    Idempotent: an already-classified VideoGenError comes back unchanged, so
+    callers can wrap this around any exception without double-wrapping.
+    """
+    if isinstance(exc, VideoGenError):
+        return exc
+    msg = str(exc)
+    low = msg.lower()
+    code: str | None = None
+    m = re.search(r"['\"]code['\"]\s*:\s*['\"]?(\w+)", msg)
+    if m:
+        code = m.group(1)
+
+    if code == "1008":
+        return VideoGenError(msg, retryable=False, scope="account", code=code)
+    if any(s in low for s in _RATELIMIT_MARKERS):
+        return VideoGenError(msg, retryable=True, scope="scene", code=code)
+    if any(s in low for s in _ACCOUNT_MARKERS):
+        return VideoGenError(msg, retryable=False, scope="account", code=code)
+    if isinstance(exc, (TimeoutError, ConnectionError, requests.RequestException)):
+        return VideoGenError(msg, retryable=True, scope="scene", code=code)
+    if any(s in low for s in _TRANSIENT_MARKERS):
+        return VideoGenError(msg, retryable=True, scope="scene", code=code)
+    if any(s in low for s in _SCENE_MARKERS):
+        return VideoGenError(msg, retryable=False, scope="scene", code=code)
+    return VideoGenError(msg, retryable=True, scope="scene", code=code)
 
 
 @dataclass
@@ -158,6 +257,14 @@ class _AsyncVideoBase(Provider):
     def _poll(self, job_id: str, timeout: float = 600.0) -> str:
         raise NotImplementedError
 
+    # Attempts per step for retryable failures. Generous enough to ride out a
+    # vendor blip, tight enough that a dead account is obvious in under a
+    # minute rather than after eight scenes times three tries each.
+    max_attempts = 3
+    # Pause before retry N+1. Kept short: these are billed APIs, so a retry
+    # should feel like a hiccup, not a coffee break.
+    _backoff = (2.0, 5.0)
+
     def generate(
         self, prompt: str, style: str, seed: int, seconds: float, w: int, h: int,
         cache: Cache, reference_images: list[Path] | None = None,
@@ -187,28 +294,67 @@ class _AsyncVideoBase(Provider):
                 f"ignoring {len(refs)} uploaded image(s) (text-to-video only)"
             )
         t0 = time.time()
-        self._report(phase="submitting", prompt_chars=len(prompt), model=self.model,
-                     ref_images=len(refs))
-        job = self._submit(prompt, seconds, seed, refs)
-        self._report(phase="submitted", task_id=str(job))
-        url = self._poll(job)
+
+        # Submit + poll are retried together, as one attempt. A submit that
+        # never produced a task id cost nothing, so re-running it is safe; a
+        # vendor-declared job failure is classified first so a dead balance
+        # fails immediately instead of buying three identical errors.
+        url = ""
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                self._report(phase="submitting", prompt_chars=len(prompt),
+                             model=self.model, ref_images=len(refs), attempt=attempt)
+                job = self._submit(prompt, seconds, seed, refs)
+                self._report(phase="submitted", task_id=str(job), attempt=attempt)
+                url = self._poll(job)
+                break
+            except Exception as e:  # noqa: BLE001 - classified just below
+                err = classify_video_error(e)
+                if not err.retryable or attempt >= self.max_attempts:
+                    self._report(phase="failed", attempt=attempt, error=str(err)[:300])
+                    raise err from e
+                pause = self._backoff[min(attempt - 1, len(self._backoff) - 1)]
+                self._report(phase="retrying", attempt=attempt,
+                             wait_s=pause, error=str(err)[:200])
+                print(f"  !! {self.name}: {err} -- retrying "
+                      f"({attempt}/{self.max_attempts - 1}) in {pause:.0f}s",
+                      file=sys.stderr)
+                time.sleep(pause)
+
+        # Download retries in place against the same URL. Deliberately NOT
+        # folded into the loop above: the job already exists and is already
+        # billed, so re-submitting to fix a flaky download would pay twice.
         self._report(phase="downloading", received_mb=0.0)
         tmp = cache.root / "video" / f"tmp_{os.getpid()}_{key}.mp4"
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        received = 0
-        last_report = 0
-        with requests.get(url, stream=True, timeout=300) as r:
-            r.raise_for_status()
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(1 << 20):
-                    if chunk:
-                        f.write(chunk)
-                        received += len(chunk)
-                        # Throttled: ~every 4 MiB, enough for a progress line
-                        # without flooding the websocket.
-                        if received - last_report >= (4 << 20):
-                            last_report = received
-                            self._report(phase="downloading", received_mb=round(received / 1e6, 1))
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                received = 0
+                last_report = 0
+                with requests.get(url, stream=True, timeout=300) as r:
+                    r.raise_for_status()
+                    with open(tmp, "wb") as f:
+                        for chunk in r.iter_content(1 << 20):
+                            if chunk:
+                                f.write(chunk)
+                                received += len(chunk)
+                                # Throttled: ~every 4 MiB, enough for a progress
+                                # line without flooding the websocket.
+                                if received - last_report >= (4 << 20):
+                                    last_report = received
+                                    self._report(phase="downloading",
+                                                 received_mb=round(received / 1e6, 1))
+                break
+            except Exception as e:  # noqa: BLE001 - classified just below
+                err = classify_video_error(e)
+                if not err.retryable or attempt >= self.max_attempts:
+                    self._report(phase="failed", attempt=attempt, error=str(err)[:300])
+                    raise err from e
+                pause = self._backoff[min(attempt - 1, len(self._backoff) - 1)]
+                self._report(phase="retrying_download", attempt=attempt, wait_s=pause)
+                print(f"  !! {self.name}: download failed ({err}); "
+                      f"retrying in {pause:.0f}s", file=sys.stderr)
+                time.sleep(pause)
         self._report(phase="downloaded", received_mb=round(received / 1e6, 1))
         final = cache.put("video", key, ".mp4", tmp)
         self._report(phase="done_scene_asset", elapsed=round(time.time() - t0, 1))

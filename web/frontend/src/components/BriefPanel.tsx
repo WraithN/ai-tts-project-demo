@@ -15,7 +15,7 @@ const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   story_drama: Clapperboard,
 }
 
-const DURATION_MIN = 10
+const DURATION_MIN = 5
 const DURATION_MAX = 60
 const DURATION_STEP = 5
 

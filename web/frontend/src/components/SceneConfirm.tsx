@@ -39,12 +39,20 @@ export function SceneConfirm({
   busy: boolean
   onBack: () => void
   onReparse: () => void
-  onConfirm: (scenes: PlanScene[], style: string, videoProvider: string | null) => void
+  onConfirm: (
+    scenes: PlanScene[],
+    style: string,
+    videoProvider: string | null,
+    withVoice: boolean,
+    withCaptions: boolean,
+  ) => void
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState<PlanScene[]>(scenes)
   const [style, setStyle] = useState('dr_vsl')
   const [videoModel, setVideoModel] = useState('__default__')
+  const [withVoice, setWithVoice] = useState(true)
+  const [withCaptions, setWithCaptions] = useState(true)
 
   // Re-seed when a fresh plan arrives (re-parse, or a new script).
   useEffect(() => setDraft(scenes), [scenes])
@@ -235,6 +243,27 @@ export function SceneConfirm({
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">{t('confirm.renderSetupHint')}</p>
+
+          {/* Audio / text layers — both optional. Captions are driven by the
+              voiceover's word timings, so they are locked off when voice is. */}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <ToggleRow
+              label={t('confirm.voice')}
+              hint={t('confirm.voiceHint')}
+              checked={withVoice}
+              onChange={(v) => {
+                setWithVoice(v)
+                if (!v) setWithCaptions(false)
+              }}
+            />
+            <ToggleRow
+              label={t('confirm.captions')}
+              hint={withVoice ? t('confirm.captionsHint') : t('confirm.captionsLocked')}
+              checked={withCaptions}
+              disabled={!withVoice}
+              onChange={setWithCaptions}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2 pt-1 sm:flex-row">
@@ -247,7 +276,15 @@ export function SceneConfirm({
           </Button>
           <Button
             className="bg-brand-btn hover:opacity-90 sm:ml-auto sm:w-auto"
-            onClick={() => onConfirm(draft, style, videoModel === '__default__' ? null : videoModel)}
+            onClick={() =>
+              onConfirm(
+                draft,
+                style,
+                videoModel === '__default__' ? null : videoModel,
+                withVoice,
+                withCaptions,
+              )
+            }
             disabled={busy || draft.length === 0}
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -281,6 +318,53 @@ function CineField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
+    </div>
+  )
+}
+
+function ToggleRow({
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string
+  hint: string
+  checked: boolean
+  disabled?: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div
+      className={cn(
+        'flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2',
+        disabled && 'opacity-50',
+      )}
+    >
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-foreground">{label}</div>
+        <div className="truncate text-[10px] text-muted-foreground">{hint}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+          checked ? 'bg-primary' : 'bg-muted-foreground/30',
+          !disabled && 'cursor-pointer',
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform',
+            checked && 'translate-x-4',
+          )}
+        />
+      </button>
     </div>
   )
 }

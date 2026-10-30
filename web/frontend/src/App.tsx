@@ -124,6 +124,8 @@ export default function App() {
     scenes: PlanScene[],
     renderStyle: string,
     videoProvider: string | null,
+    withVoice: boolean,
+    withCaptions: boolean,
   ) => {
     if (!plan) return
     if (!ready) {
@@ -151,6 +153,8 @@ export default function App() {
         voice_provider: p?.voice_provider ?? null,
         target_seconds: p?.target_seconds ?? null,
         reference_images: p?.reference_images ?? [],
+        with_voice: withVoice,
+        with_captions: withCaptions,
       })
       setJobId(r.job_id)
       onLog(`> confirmed ${scenes.length} scenes · job ${r.job_id}`)

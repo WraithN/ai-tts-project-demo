@@ -67,6 +67,17 @@ export interface JobStats {
   [k: string]: unknown
 }
 
+/** A scene that failed video generation and fell back to a solid backdrop. */
+export interface SceneWarning {
+  scene_id: string
+  index: number
+  error: string
+  /** 'account' = balance/auth failure (subsequent scenes skipped); 'scene' = single-shot failure. */
+  scope?: 'account' | 'scene'
+  /** True when this scene was skipped entirely due to an earlier account-level failure. */
+  skipped?: boolean
+}
+
 export interface Job {
   job_id: string
   kind?: 'scripts' | 'plan' | 'render' | string
@@ -83,6 +94,8 @@ export interface Job {
   scenes?: number
   rendered?: number
   reused?: number
+  /** Scenes degraded to a solid backdrop after video generation failed. */
+  warnings?: SceneWarning[]
   /** Live detail for the task panel (submit bytes, vendor task id, ...). */
   stats?: JobStats | null
   /** Final payload for generation jobs (scripts / plan). */
@@ -240,6 +253,8 @@ export const api = {
     voice_provider: string | null
     target_seconds?: number | null
     reference_images?: string[]
+    with_voice?: boolean
+    with_captions?: boolean
   }) =>
     json<{ job_id: string }>('/api/render', {
       method: 'POST',

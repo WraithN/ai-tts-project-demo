@@ -172,7 +172,7 @@ export default {
     audiencePlaceholder: '例：新手爸妈、夜班族（可直接输入）',
     audiencePresets: ['新手爸妈', '职场白领', '学生党', '健身人群', '养宠家庭', '银发族'],
     duration: '视频时长',
-    durationHint: '成片目标总时长，10–60 秒（每次 ±5）。各场景等比拉伸以贴近目标，配音与字幕保持同步。',
+    durationHint: '成片目标总时长，5–60 秒（每次 ±5）。各场景等比拉伸以贴近目标，配音与字幕保持同步。',
     refTitle: '产品参考图（可选）',
     refHint: '上传产品三视图（正面 / 侧面 / 背面），AI 视频将在所有镜头中保持产品外观一致。最多 9 张。',
     refAdd: '添加图片',
@@ -217,6 +217,11 @@ export default {
     style: '视觉风格',
     videoModel: '视频模型',
     videoModelDefault: '用设置页保存的默认',
+    voice: '配音',
+    voiceHint: '生成 AI 旁白（TTS），关闭则为无声片段',
+    captions: '字幕',
+    captionsHint: '烧录式动态字幕，跟随旁白逐词高亮',
+    captionsLocked: '关闭配音后字幕不可用',
     planned: '已生成 {{n}} 个场景，确认后再出片',
   },
 
@@ -256,6 +261,11 @@ export default {
     scenes: '场景数',
     rendered: '渲染 {{n}} · 复用 {{m}}',
     reusedHint: '复用数是「改一行不重渲全片」的直接证据',
+    degraded: '{{n}} 个场景生成失败，已用纯色背景代替',
+    degradedHint: '视频仍可预览与导出；修复后重渲该场景即可替换占位画面',
+    degradedAccount: '账户级问题（余额/配额），{{n}} 个场景使用占位画面',
+    degradedAccountHint: '视频仍完整可看（配音字幕不受影响）；充值或修复 API Key 后重渲即可补全画面',
+    sceneSkipped: '因账户级问题跳过生成',
   },
 
   edit: {

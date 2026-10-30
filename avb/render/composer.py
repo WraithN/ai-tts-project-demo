@@ -393,6 +393,7 @@ def render_scene_frames(
     global_start: float,
     total: float,
     draft: bool = False,
+    with_captions: bool = True,
 ) -> Iterator[np.ndarray]:
     spec = get_style(scene.visual.style or project.style)
 
@@ -436,10 +437,13 @@ def render_scene_frames(
             g = ImageDraw.Draw(frame)
             gfx(g, out_w, out_h, clamp01(t / max(1e-6, duration)), spec.palette, caption_labels(scene))
 
-        # legibility scrim behind captions
-        scrim(frame, out_w, out_h, scene.caption.position)
-
-        draw_caption(frame, chunks, t, spec, scene.caption, out_w, out_h, scene.vo.energy)
+        # legibility scrim + kinetic captions -- both ride the word-level
+        # VO timings. Skip the whole block when captions are turned off (or
+        # there are no words, e.g. a no-voiceover render), so we don't paint
+        # a dark band with nothing on it.
+        if with_captions and (assets.vo_words or []):
+            scrim(frame, out_w, out_h, scene.caption.position)
+            draw_caption(frame, chunks, t, spec, scene.caption, out_w, out_h, scene.vo.energy)
         draw_chrome(frame, project, spec, out_w, out_h, global_start + t, total, scene)
 
         apply_interrupt_mutable(frame, scene, t, out_w, out_h, rng)

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { Film, Loader2 } from 'lucide-react'
+import { AlertTriangle, Film, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/primitives'
 import { Panel, PanelHeader, PanelBody } from '@/components/ui/panel'
 import type { Job } from '@/lib/api'
@@ -71,6 +71,33 @@ export function PreviewCard({ job }: { job: Job | null }) {
               {t('preview.rendered', { n: job!.rendered ?? 0, m: job!.reused ?? 0 })} ·{' '}
               {t('preview.reusedHint')}
             </p>
+            {job!.warnings && job!.warnings.length > 0 ? (
+              <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  {job!.warnings.some((w) => w.scope === 'account')
+                    ? t('preview.degradedAccount', { n: job!.warnings.length })
+                    : t('preview.degraded', { n: job!.warnings.length })}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {job!.warnings.some((w) => w.scope === 'account')
+                    ? t('preview.degradedAccountHint')
+                    : t('preview.degradedHint')}
+                </p>
+                <ul className="mt-1.5 space-y-0.5">
+                  {job!.warnings.map((w) => (
+                    <li key={w.scene_id} className="text-xs text-muted-foreground">
+                      <span className="font-medium">#{w.index}</span>{' '}
+                      {w.skipped ? (
+                        <span className="italic">{t('preview.sceneSkipped')}</span>
+                      ) : (
+                        <span className="line-clamp-2 break-all">{w.error}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </>
         ) : null}
       </PanelBody>
