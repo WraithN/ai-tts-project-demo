@@ -96,7 +96,10 @@ def test_synth_fans_out_video_generation():
         proj = _project(6)
 
         t0 = time.perf_counter()
-        out = pipe.synth(proj)
+        # with_voice=False isolates the video fan-out from the network-bound
+        # voiceover synthesis, so the wall-time assertion measures only the
+        # concurrent video generation we are testing here.
+        out = pipe.synth(proj, with_voice=False)
         elapsed = time.perf_counter() - t0
 
         # Serial would be 6 * 0.15 = 0.9s; 4-wide fan-out is ~0.3s.
@@ -124,11 +127,17 @@ def test_progress_callbacks_are_thread_isolated():
             records.append((info.get("scene_id"), info.get("scene_tag")))
 
         pipe.video_progress_cb = _cb
-        pipe.synth(proj)
+        # with_voice=False keeps the test offline/fast; we only assert on the
+        # video provider's generate()-internal reports below.
+        pipe.synth(proj, with_voice=False)
 
-        assert records, "no progress was reported"
-        for scene_id, scene_tag in records:
-            assert scene_id is not None and scene_tag is not None
+        # Only generate()-internal reports carry scene_tag (the per-scene
+        # observer key). The scene_done / scene_degraded events emitted by
+        # synth() itself legitimately do not, so filter to the tagged ones.
+        tagged = [(sid, tag) for (sid, tag) in records if tag is not None]
+        assert tagged, "no generate() progress was reported"
+        for scene_id, scene_tag in tagged:
+            assert scene_id is not None
             assert scene_id == f"s{scene_tag}", (
                 f"cross-talk: report for {scene_id} carried tag {scene_tag}"
             )
@@ -170,12 +179,17 @@ def test_account_halt_degrades_instead_of_aborting():
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        pipe = _make_pipe(td, workers=4)
+        # workers=1 makes the run serial, so the skip contract is
+        # deterministic: scene 3 fails (account), scenes 4-6 are skipped.
+        # (With workers>1 the pool races -- a scene already in flight when the
+        # halt is raised finishes instead of skipping, which is the intended
+        # resilient behaviour but makes exact indices nondeterministic.)
+        pipe = _make_pipe(td, workers=1)
         pipe.video = HaltVideo()
         proj = _project(6)
 
         # Must NOT raise; returns the full set of assets.
-        out = pipe.synth(proj)
+        out = pipe.synth(proj, with_voice=False)
         assert set(out) == {s.id for s in proj.scenes}
 
         # Warnings: scene 3 (the account failure) + scenes 4,5,6 (skipped).
